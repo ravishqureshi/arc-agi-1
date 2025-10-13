@@ -1,0 +1,23 @@
+# Python virtual environment
+venv/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# Kaggle credentials
+.kaggle/
+kaggle.json
+
+# Data files
+*.zip
+data/
+
+# IDE
+.vscode/
+.idea/
