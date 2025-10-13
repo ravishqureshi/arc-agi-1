@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from typing import Tuple, Dict, List
 from collections import deque
 
-from .types import Grid, ObjList, assert_grid
+from .types import Grid, ObjList, Obj, assert_grid
 
 # =============================================================================
 # Invariants Dataclass
@@ -70,7 +70,7 @@ def bbox_nonzero(g: Grid, bg: int=0) -> Tuple[int,int,int,int]:
 def connected_components(g: Grid, bg: int=0) -> ObjList:
     """
     Return list of connected components (4-connectivity).
-    Each component: (color, [(r,c), ...])
+    Each component is an Obj with color, pixels, size, bbox, centroid.
     """
     H, W = g.shape
     vis = np.zeros_like(g, dtype=bool)
@@ -93,9 +93,55 @@ def connected_components(g: Grid, bg: int=0) -> ObjList:
                             q.append((nr,nc))
                             pix.append((nr,nc))
 
-                comps.append((col, pix))
+                # Compute bbox and centroid
+                rs, cs = zip(*pix)
+                r0, r1 = min(rs), max(rs)
+                c0, c1 = min(cs), max(cs)
+                centroid = (float(np.mean(rs)), float(np.mean(cs)))
+
+                comps.append(Obj(
+                    color=int(col),
+                    pixels=pix,
+                    size=len(pix),
+                    bbox=(r0, c0, r1, c1),
+                    centroid=centroid
+                ))
 
     return comps
+
+def rank_objects(objs: ObjList, group: str='global', by: str='size') -> Dict:
+    """
+    Return rank indexes for objects.
+
+    Args:
+        objs: List of Obj instances
+        group: 'global' (rank across all) or 'per_color' (rank within each color)
+        by: Ranking key ('size' supported, future: 'area', 'x', 'y')
+
+    Returns:
+        Dict with rankings:
+        - group='global': {"global": [idx0, idx1, ...]} (largest first)
+        - group='per_color': {color1: [idx0, idx1, ...], color2: [...], ...}
+    """
+    if by != 'size':
+        raise NotImplementedError(f"Only by='size' implemented, got by='{by}'")
+
+    if group == 'global':
+        # Sort by size descending (largest = rank 0)
+        order = np.argsort([-o.size for o in objs])
+        return {"global": [int(i) for i in order]}
+
+    elif group == 'per_color':
+        # Separate rankings for each color
+        per = {}
+        for c in sorted(set(o.color for o in objs)):
+            idx = [i for i, o in enumerate(objs) if o.color == c]
+            order = sorted(idx, key=lambda i: -objs[i].size)  # Largest first
+            per[int(c)] = [int(i) for i in order]
+        return per
+
+    else:
+        raise ValueError(f"group must be 'global' or 'per_color', got '{group}'")
 
 # =============================================================================
 # Symmetry Detection

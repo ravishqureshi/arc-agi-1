@@ -6,10 +6,13 @@ from dataclasses import dataclass
 from typing import List, Tuple, Optional, Callable
 
 from .types import Grid
-from .invariants import exact_equals
+from .invariants import exact_equals, connected_components, rank_objects
 from ..operators.symmetry import ROT, FLIP
 from ..operators.spatial import CROP, BBOX, CROP_BBOX_NONZERO
-from ..operators.masks import KEEP, MASK_NONZERO
+from ..operators.masks import KEEP, MASK_NONZERO, MASK_OBJ_RANK
+from ..operators.color import COLOR_PERM, infer_color_mapping, merge_mappings
+import numpy as np
+from collections import Counter
 
 @dataclass
 class Rule:
@@ -52,11 +55,242 @@ def induce_keep_nonzero_rule(train: List[Tuple[Grid, Grid]], bg: int = 0) -> Opt
     ok = all(exact_equals(prog(x), y) for x, y in train)
     return Rule("KEEP_NONZERO", {"bg": bg}, prog) if ok else None
 
+def induce_color_perm_rule(train: List[Tuple[Grid, Grid]]) -> Optional[Rule]:
+    """
+    Learn a global color permutation from training pairs.
+
+    Strategy:
+    1. Infer color mapping from first train pair
+    2. Verify that same mapping works for ALL train pairs (residual=0)
+    3. Return rule if consistent, None otherwise
+
+    This is NOT hard coding - we learn from TRAINING pairs, apply to TEST inputs.
+    """
+    if not train:
+        return None
+
+    # Infer mapping from first train pair
+    x0, y0 = train[0]
+    mapping = infer_color_mapping(x0, y0)
+
+    if not mapping:
+        return None
+
+    # Build the transformation
+    prog = COLOR_PERM(mapping)
+
+    # Verify: Does this mapping achieve residual=0 on ALL train pairs?
+    for x, y in train:
+        if not exact_equals(prog(x), y):
+            return None
+
+    # Success - this mapping works for entire training set
+    return Rule("COLOR_PERM", {"mapping": mapping}, prog)
+
+def induce_recolor_obj_rank(train: List[Tuple[Grid, Grid]], rank: int = 0, group: str = 'global', bg: int = 0) -> Optional[Rule]:
+    """
+    Learn object-rank recolor rule from training pairs.
+
+    Hypothesis:
+    - global: Output == input except rank-th object recolored to single target color
+    - per_color: Output == input except rank-th object of EACH color recolored
+                 (each source color → potentially different target color)
+
+    Args:
+        train: Training pairs
+        rank: Object rank (0 = largest, 1 = second largest, etc.)
+        group: 'global' (rank across all) or 'per_color' (rank within each color)
+        bg: Background color
+
+    Returns:
+        Rule if pattern matches all train pairs with residual=0, else None
+    """
+    if not train:
+        return None
+
+    # Shape must match for this rule to apply
+    for x, y in train:
+        if x.shape != y.shape:
+            return None
+
+    if group == 'global':
+        # GLOBAL: Single target color for the ranked object
+        target_color = None
+        for x, y in train:
+            mask_fn = MASK_OBJ_RANK(rank=rank, group=group, bg=bg)
+            m = mask_fn(x)
+
+            if not np.any(m):
+                return None  # No such object at this rank
+
+            # Check colors inside mask in output (should be uniform)
+            vals = y[m]
+            if vals.size == 0:
+                return None
+
+            # Most common color in masked region
+            c = int(Counter(vals.tolist()).most_common(1)[0][0])
+
+            if target_color is None:
+                target_color = c
+            elif target_color != c:
+                return None  # Inconsistent target color across train pairs
+
+        # Build program: recolor only masked area to target_color
+        def recolor_prog_global(z: Grid) -> Grid:
+            mask_fn = MASK_OBJ_RANK(rank=rank, group=group, bg=bg)
+            m = mask_fn(z)
+            out = z.copy()
+            out[m] = target_color
+            return out
+
+        # Verify exact match on ALL train pairs (residual=0)
+        for x, y in train:
+            if not exact_equals(recolor_prog_global(x), y):
+                return None
+
+        return Rule("RECOLOR_OBJ_RANK", {
+            "rank": rank,
+            "group": group,
+            "bg": bg,
+            "color": target_color
+        }, recolor_prog_global)
+
+    else:  # group == 'per_color'
+        # PER_COLOR: Build mapping {src_color → tgt_color} for each color's ranked object
+        color_map = {}
+
+        for x, y in train:
+            # Get objects and their per-color ranks
+            objs = connected_components(x, bg)
+            if not objs:
+                return None
+
+            ranks = rank_objects(objs, group='per_color', by='size')
+
+            # For each color, check what the rank-th object gets recolored to
+            for src_color, order in ranks.items():
+                if rank >= len(order):
+                    continue  # This color doesn't have object at this rank
+
+                obj_idx = order[rank]
+                obj = objs[obj_idx]
+
+                # Get target color from output
+                # All pixels of this object should map to same target
+                tgt_colors = set()
+                for r, c in obj.pixels:
+                    tgt_colors.add(int(y[r, c]))
+
+                if len(tgt_colors) != 1:
+                    return None  # Non-uniform target for this object
+
+                tgt_color = tgt_colors.pop()
+
+                # Check consistency across train pairs
+                if src_color in color_map:
+                    if color_map[src_color] != tgt_color:
+                        return None  # Inconsistent mapping across train pairs
+                else:
+                    color_map[src_color] = tgt_color
+
+        if not color_map:
+            return None
+
+        # Build program: recolor each color's ranked object per the mapping
+        def recolor_prog_per_color(z: Grid) -> Grid:
+            out = z.copy()
+            objs = connected_components(z, bg)
+            if not objs:
+                return out
+
+            ranks = rank_objects(objs, group='per_color', by='size')
+
+            for src_color, order in ranks.items():
+                if rank >= len(order):
+                    continue
+                if src_color not in color_map:
+                    continue  # No mapping learned for this color
+
+                obj_idx = order[rank]
+                obj = objs[obj_idx]
+                tgt_color = color_map[src_color]
+
+                for r, c in obj.pixels:
+                    out[r, c] = tgt_color
+
+            return out
+
+        # Verify exact match on ALL train pairs (residual=0)
+        for x, y in train:
+            if not exact_equals(recolor_prog_per_color(x), y):
+                return None
+
+        return Rule("RECOLOR_OBJ_RANK", {
+            "rank": rank,
+            "group": group,
+            "bg": bg,
+            "color_map": color_map
+        }, recolor_prog_per_color)
+
+def induce_keep_obj_topk(train: List[Tuple[Grid, Grid]], k: int = 1, bg: int = 0) -> Optional[Rule]:
+    """
+    Learn keep-top-k-objects rule from training pairs.
+
+    Hypothesis: Output == only top-k (global rank by size) objects kept, others zeroed.
+
+    Args:
+        train: Training pairs
+        k: Number of top objects to keep
+        bg: Background color
+
+    Returns:
+        Rule if pattern matches all train pairs with residual=0, else None
+    """
+    if not train:
+        return None
+
+    # Check if rule applies (shape must remain same)
+    for x, y in train:
+        if x.shape != y.shape:
+            return None
+
+    def keep_prog(z: Grid) -> Grid:
+        objs = connected_components(z, bg)
+        if not objs:
+            return np.zeros_like(z)
+
+        ranks = rank_objects(objs, group='global', by='size')
+        order = ranks["global"]
+
+        m = np.zeros_like(z, dtype=bool)
+        for rnk, idx in enumerate(order):
+            if rnk < k:
+                for (r, c) in objs[idx].pixels:
+                    m[r, c] = True
+
+        out = np.zeros_like(z)
+        out[m] = z[m]
+        return out
+
+    # Verify exact match on ALL train pairs
+    for x, y in train:
+        if not exact_equals(keep_prog(x), y):
+            return None
+
+    return Rule("KEEP_OBJ_TOPK", {"k": k, "bg": bg}, keep_prog)
+
 # Try rules in order of simplicity (Occam's razor)
 CATALOG = [
     induce_symmetry_rule,
+    induce_color_perm_rule,
     induce_crop_nonzero_rule,
     induce_keep_nonzero_rule,
+    # Object rank rules (try common patterns)
+    lambda train: induce_recolor_obj_rank(train, rank=0, group='global', bg=0),
+    lambda train: induce_recolor_obj_rank(train, rank=0, group='per_color', bg=0),
+    lambda train: induce_keep_obj_topk(train, k=1, bg=0),
+    lambda train: induce_keep_obj_topk(train, k=2, bg=0),
 ]
 
 def induce_rule(train: List[Tuple[Grid, Grid]]) -> Optional[Rule]:

@@ -67,6 +67,25 @@
   - "What is the evaluation metric?"
   - "What is the prize structure?"
 
+### docs/BUGS_AND_GAPS.md ⚠️ CRITICAL
+- **What:** Master list of known bugs, implementation gaps, and optimization opportunities
+- **Purpose:** Zero compromises tracking system - every issue documented and tracked
+- **Answers:**
+  - "What known bugs exist?"
+  - "What features are missing?"
+  - "What needs to be fixed before continuing?"
+  - "Why did X not improve coverage?"
+- **Key sections:**
+  - Critical bugs (blocking issues)
+  - Implementation gaps (missing features)
+  - Optimization opportunities (performance)
+  - Design decisions log (learning from experiments)
+  - Test failure patterns
+- **Status legend:** `[ ]` Open, `[!]` Critical, `[x]` Fixed, `[~]` Not needed, `[?]` Investigating
+- **Update protocol:** Add entry after each major feature, bug discovery, or test coverage plateau
+- **Philosophy:** Pure mathematics approach with zero shortcuts - track everything
+- **Cross-reference:** TEST_COVERAGE.md (what fails), IMPLEMENTATION_PLAN.md (what to build)
+
 ---
 
 ## Architecture & Design (docs/)
@@ -435,6 +454,15 @@ print(f"Rule: {result.rule.name}, Accuracy: {result.acc_exact}")
 ### "I need to understand Universe Intelligence"
 → docs/core/universe-intelligence-unified.md (complete guide), src/universe_intelligence.py (implementation)
 
+### "I need to check for known bugs or issues"
+→ docs/BUGS_AND_GAPS.md (master bug/gap list with status tracking)
+
+### "I want to understand why X didn't improve coverage"
+→ docs/BUGS_AND_GAPS.md ("Design Decisions Log" section)
+
+### "I need to report a bug or implementation gap"
+→ Add entry to docs/BUGS_AND_GAPS.md following the entry format template
+
 ---
 
 ## Conventions
@@ -470,7 +498,8 @@ If a document is added, moved, or a major section changes:
 1. Update this CONTEXT_INDEX.md
 2. Update docs/architecture.md (if code structure changes)
 3. Update docs/TEST_COVERAGE.md (if adding operators/improving accuracy)
-4. Update README.md (if top-level structure changes)
+4. Update docs/BUGS_AND_GAPS.md (if discovering bugs, gaps, or design decisions)
+5. Update README.md (if top-level structure changes)
 
 ---
 

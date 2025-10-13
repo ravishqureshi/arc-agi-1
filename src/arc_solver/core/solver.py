@@ -38,6 +38,25 @@ def pce_for_rule(rule: Rule) -> str:
     if rule.name == "FLIP":
         axis_name = 'horizontal' if rule.params['axis'] == 'h' else 'vertical'
         return f"Flip grid along {axis_name} axis."
+    if rule.name == "COLOR_PERM":
+        mapping = rule.params['mapping']
+        pairs = ', '.join(f"{k}→{v}" for k, v in sorted(mapping.items()))
+        return f"Color permutation: {pairs} (learned from train, residual=0)."
+    if rule.name == "RECOLOR_OBJ_RANK":
+        grp = rule.params['group']
+        r = rule.params['rank']
+        target = "largest" if r == 0 else f"rank {r}"
+
+        if grp == 'global':
+            col = rule.params['color']
+            return f"Recolor the {target} component globally to color {col} (verified on train: residual=0)."
+        else:  # per_color
+            color_map = rule.params['color_map']
+            mappings = ', '.join(f"{k}→{v}" for k, v in sorted(color_map.items()))
+            return f"Recolor the {target} component of each color: {mappings} (verified on train: residual=0)."
+    if rule.name == "KEEP_OBJ_TOPK":
+        k = rule.params['k']
+        return f"Keep only the top-{k} component{'s' if k > 1 else ''} by size; zero others (verified on train: residual=0)."
     if rule.name == "CROP_BBOX_NONZERO":
         return "Crop to bounding box of non-zero content (edge writes define the present)."
     if rule.name == "KEEP_NONZERO":

@@ -21,14 +21,17 @@ arc-agi-1/
 │   └── sample_submission.json              (19 KB)
 │
 ├── docs/                          # Documentation
-│   ├── SUBMISSION_REQUIREMENTS.md # Source of truth for submission format
-│   ├── CODE_STRUCTURE.md          # How to organize code (%%writefile pattern)
-│   ├── arc-agi-kaggle-docs.md     # Competition documentation
-│   └── core/                      # Universe Intelligence framework docs
-│       ├── universe-intelligence.md        # V1: Quadratic enrichment
-│       ├── universe-intelligence-v2.md     # V2: All three enrichments
-│       ├── universe-intelligence-unified.md # Complete guide
-│       └── ui_arc_demo.md         # ARC demo explanation
+│   ├── CONTEXT_INDEX.md            # 📍 Navigation map for all docs/code
+│   ├── BUGS_AND_GAPS.md            # ⚠️ Known bugs, gaps, and design decisions
+│   ├── IMPLEMENTATION_PLAN.md      # Master plan for 79.6%+ accuracy
+│   ├── TEST_COVERAGE.md            # Test coverage report (10/1076 = 0.9%)
+│   ├── SUBMISSION_REQUIREMENTS.md  # Source of truth for submission format
+│   ├── CODE_STRUCTURE.md           # How to organize code (%%writefile pattern)
+│   ├── arc-agi-kaggle-docs.md      # Competition documentation
+│   ├── architecture.md             # Modular code architecture (16 files)
+│   └── core/                       # Universe Intelligence framework docs
+│       ├── universe-intelligence-unified.md # Complete guide (all 3 enrichments)
+│       └── ui_arc_demo.md          # ARC demo explanation
 │
 ├── notebooks/                     # Development notebooks
 │   └── submission.ipynb           # Final submission notebook (future)
@@ -208,11 +211,54 @@ DEMO accuracy: 3/3 test grids matched exactly.
 1. **Explore data** in `data/` folder
 2. **Read requirements** in `docs/SUBMISSION_REQUIREMENTS.md`
 3. **Study UI framework** in `docs/core/universe-intelligence-unified.md`
-4. **Test demo solver**: `python src/arc_demo.py`
-5. **Develop algorithm** locally with training data
-6. **Validate** with evaluation data
-7. **Create Kaggle notebook** for submission (use `%%writefile` pattern from `docs/CODE_STRUCTURE.md`)
-8. **Submit** (max 1 per day)
+4. **Check roadmap** in `docs/IMPLEMENTATION_PLAN.md` and `docs/TEST_COVERAGE.md`
+5. **Check known issues** in `docs/BUGS_AND_GAPS.md` before starting new features
+6. **Test demo solver**: `python src/arc_demo.py`
+7. **Develop algorithm** locally with training data
+8. **Validate** with evaluation data
+9. **Update docs** (TEST_COVERAGE.md if accuracy changed, BUGS_AND_GAPS.md if bugs found)
+10. **Create Kaggle notebook** for submission (use `%%writefile` pattern from `docs/CODE_STRUCTURE.md`)
+11. **Submit** (max 1 per day)
+
+## Quality Tracking
+
+**Zero Compromises Philosophy:** Every bug, gap, and design decision is tracked for a serious attempt at topping ARC-AGI.
+
+### docs/BUGS_AND_GAPS.md - Master Tracking System
+
+**Purpose:** Document all known issues, missing features, and learnings to prevent knowledge loss during development.
+
+**Status Legend:**
+- `[ ]` Open - Known issue, not yet addressed
+- `[!]` Critical - Blocks progress or causes incorrect results
+- `[x]` Fixed - Resolved and verified
+- `[~]` Not Needed - Assessed and determined unnecessary
+- `[?]` Investigating - Root cause being analyzed
+
+**Key Sections:**
+1. **Critical Bugs** - Issues that cause incorrect results (must fix immediately)
+2. **Implementation Gaps** - Missing features from the plan
+3. **Optimization Opportunities** - Performance improvements
+4. **Design Decisions Log** - Why X didn't work, what we learned
+5. **Test Failure Patterns** - Systematic failure modes
+
+**When to Update:**
+- After discovering any bug (logic error, incorrect result, crash)
+- When adding a feature that doesn't improve coverage (document why)
+- When making non-obvious design decisions
+- Before and after major feature additions
+
+**Example Entry:**
+```markdown
+### [x] Per-Color Recolor Logic Bug
+**Discovered:** 2025-10-13
+**Location:** src/arc_solver/core/induction.py
+**Problem:** Expected uniform target color, but per-color means different targets
+**Fix:** Build {src_color → tgt_color} mapping instead of single target
+**Impact:** +1 task (0d3d703e), critical for per-color transformations
+```
+
+See `docs/BUGS_AND_GAPS.md` for complete tracking of all issues and learnings.
 
 ## Submission Requirements
 

@@ -12,6 +12,7 @@ Core types used throughout the ARC solver:
 
 import numpy as np
 from typing import List, Tuple
+from dataclasses import dataclass
 
 # =============================================================================
 # Core Types
@@ -19,7 +20,17 @@ from typing import List, Tuple
 
 Grid = np.ndarray          # dtype=int, shape (H, W)
 Mask = np.ndarray          # dtype=bool, same shape as Grid
-ObjList = List[Tuple[int, List[Tuple[int,int]]]]  # [(color, [(r,c), ...]), ...]
+
+@dataclass
+class Obj:
+    """A connected component object with properties."""
+    color: int
+    pixels: List[Tuple[int,int]]
+    size: int
+    bbox: Tuple[int,int,int,int]      # (r0, c0, r1, c1)
+    centroid: Tuple[float,float]      # (r_mean, c_mean)
+
+ObjList = List[Obj]  # List of objects (enhanced from simple tuples)
 
 # =============================================================================
 # Type Utilities
