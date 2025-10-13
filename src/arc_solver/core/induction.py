@@ -11,8 +11,8 @@ from ..operators.symmetry import ROT, FLIP
 from ..operators.spatial import CROP, BBOX, CROP_BBOX_NONZERO, MOVE_OBJ_RANK, COPY_OBJ_RANK
 from ..operators.masks import KEEP, MASK_NONZERO, MASK_OBJ_RANK, PARITY_MASK, RECOLOR_PARITY
 from ..operators.color import COLOR_PERM, infer_color_mapping, merge_mappings
-from ..operators.tiling import TILE, TILE_SUBGRID
-from ..operators.drawing import DRAW_LINE, DRAW_BOX, FLOOD_FILL
+from ..operators.tiling import TILE, TILE_SUBGRID, TILE_CONST_PATTERN, extract_motif
+from ..operators.drawing import DRAW_LINE, DRAW_BOX, FLOOD_FILL, BORDER_PAINT
 import numpy as np
 from collections import Counter
 
@@ -491,6 +491,80 @@ def induce_tile_rule(train: List[Tuple[Grid, Grid]]) -> Optional[Rule]:
 
     return None
 
+def induce_const_tile_pattern_rule(train: List[Tuple[Grid, Grid]]) -> Optional[Rule]:
+    """
+    Learn constant tiling pattern from training pairs.
+
+    Hypothesis: Output is always a constant tiled pattern, independent of input
+    content (input only determines output dimensions).
+
+    Strategy:
+    1. Try to extract repeating motif from each training output
+    2. Use the smallest motif found across all outputs
+    3. Verify that motif works for ALL train pairs
+
+    Returns:
+        Rule if pattern matches, else None
+
+    Example:
+        Input1: [[0,0]]    → Output1: [[5,6],[7,8]]
+        Input2: [[0,0,0,0]] → Output2: [[5,6,5,6],[7,8,7,8]]
+        Motif: [[5,6],[7,8]] (constant, independent of input content)
+    """
+    if not train:
+        return None
+
+    # Try to find a repeating motif from train outputs
+    # Use the first output that shows repetition, or the smallest pattern
+    candidate_motif = None
+    min_size = float('inf')
+
+    for x, y in train:
+        motif = extract_motif(y)
+        size = motif.shape[0] * motif.shape[1]
+        # If this motif is smaller and shows repetition, use it
+        if size < min_size and motif.shape != y.shape:
+            candidate_motif = motif
+            min_size = size
+
+    # If no repeating pattern found in any output, check if all outputs are identical
+    # (might be a constant pattern that exactly matches some input size)
+    if candidate_motif is None:
+        # Try using the first output as motif
+        _, y0 = train[0]
+        candidate_motif = y0
+
+    # Build program and verify on ALL train pairs
+    prog = TILE_CONST_PATTERN(candidate_motif)
+
+    for x, y in train:
+        result = prog(x)
+        if not exact_equals(result, y):
+            return None
+
+    # Only return if this is actually a constant pattern (content independent of input)
+    # Check that motif size is smaller than at least one output
+    is_tiling = any(candidate_motif.shape != y.shape for _, y in train)
+    if not is_tiling:
+        return None
+
+    # Additional check: Verify input content is truly ignored
+    # If any input has similar structure to output, this might not be constant tiling
+    # Check: Do any inputs have significant overlap with outputs?
+    for x, y in train:
+        if x.shape == y.shape:
+            # Count how many cells remain unchanged
+            unchanged = np.sum(x == y)
+            total = x.size
+            # If more than 20% of cells unchanged, this is likely not constant tiling
+            if unchanged / total > 0.2:
+                return None
+
+    return Rule("TILE_CONST_PATTERN",
+                {"motif": candidate_motif.tolist()},  # Store as list for serialization
+                prog,
+                f"Tile constant {candidate_motif.shape} pattern to match input dims")
+
 def induce_draw_line_rule(train: List[Tuple[Grid, Grid]], bg: int = 0) -> Optional[Rule]:
     """
     Learn line drawing parameters from training pairs.
@@ -608,6 +682,60 @@ def induce_parity_recolor(train: List[Tuple[Grid, Grid]]) -> Optional[Rule]:
 
     return None
 
+def induce_border_paint_rule(train: List[Tuple[Grid, Grid]]) -> Optional[Rule]:
+    """
+    Learn border paint rule from training pairs.
+
+    Hypothesis: Output == input except border cells painted with constant color.
+
+    Strategy:
+    1. Infer border color from first train pair's output
+    2. Verify that same color works for ALL train pairs (residual=0)
+
+    Returns:
+        Rule if pattern matches, else None
+    """
+    if not train:
+        return None
+
+    # Must have same shape
+    for x, y in train:
+        if x.shape != y.shape:
+            return None
+
+    # Infer border color from first pair
+    x0, y0 = train[0]
+    H, W = y0.shape
+
+    # Create border mask
+    border = np.zeros_like(y0, dtype=bool)
+    border[0, :] = True      # Top edge
+    border[-1, :] = True     # Bottom edge
+    border[:, 0] = True      # Left edge
+    border[:, -1] = True     # Right edge
+
+    if not np.any(border):
+        return None
+
+    # Get most common color in border cells of output
+    border_colors = y0[border]
+    if border_colors.size == 0:
+        return None
+
+    target_color = int(Counter(border_colors.tolist()).most_common(1)[0][0])
+
+    # Build program
+    prog = BORDER_PAINT(target_color)
+
+    # Verify on ALL train pairs
+    if all(exact_equals(prog(x), y) for x, y in train):
+        return Rule("BORDER_PAINT",
+                   {"color": target_color},
+                   prog,
+                   f"Paint border with color {target_color}")
+
+    return None
+
 # Try rules in order of simplicity (Occam's razor)
 # Principle: Try more specific/constrained operations before general ones
 CATALOG = [
@@ -616,6 +744,7 @@ CATALOG = [
     induce_crop_nonzero_rule,
     induce_keep_nonzero_rule,
     induce_parity_recolor,  # Parity-based recoloring (checkerboard patterns)
+    induce_border_paint_rule,  # Border painting (paint outer edge with constant color)
     # Object rank rules (try common patterns) - More specific than tiling
     lambda train: induce_recolor_obj_rank(train, rank=0, group='global', bg=0),
     lambda train: induce_recolor_obj_rank(train, rank=0, group='per_color', bg=0),
@@ -626,6 +755,7 @@ CATALOG = [
     lambda train: induce_move_or_copy_obj_rank(train, rank=0, group='per_color', bg=0),
     # Tiling and drawing operators - More general, try after object operations
     induce_tile_rule,
+    induce_const_tile_pattern_rule,  # Constant pattern tiling (output independent of input content)
     induce_draw_line_rule,
 ]
 
@@ -945,6 +1075,59 @@ def induce_tile(train: List[Tuple[Grid, Grid]]) -> List[Rule]:
 
     return rules
 
+def induce_const_tile_pattern(train: List[Tuple[Grid, Grid]]) -> List[Rule]:
+    """
+    Learn constant tiling pattern. Beam-compatible version.
+
+    Returns rules where output is always a constant tiled pattern,
+    independent of input content (input only determines output dimensions).
+    """
+    if not train:
+        return []
+
+    # Try to find a repeating motif from train outputs
+    candidate_motif = None
+    min_size = float('inf')
+
+    for x, y in train:
+        motif = extract_motif(y)
+        size = motif.shape[0] * motif.shape[1]
+        # If this motif is smaller and shows repetition, use it
+        if size < min_size and motif.shape != y.shape:
+            candidate_motif = motif
+            min_size = size
+
+    # If no repeating pattern found, try first output as motif
+    if candidate_motif is None:
+        _, y0 = train[0]
+        candidate_motif = y0
+
+    # Build program and verify on ALL train pairs
+    prog = TILE_CONST_PATTERN(candidate_motif)
+
+    for x, y in train:
+        result = prog(x)
+        if not exact_equals(result, y):
+            return []
+
+    # Only return if this is actually a tiling pattern
+    is_tiling = any(candidate_motif.shape != y.shape for _, y in train)
+    if not is_tiling:
+        return []
+
+    # Additional check: Verify input content is truly ignored
+    for x, y in train:
+        if x.shape == y.shape:
+            unchanged = np.sum(x == y)
+            total = x.size
+            if unchanged / total > 0.2:
+                return []
+
+    return [Rule("TILE_CONST_PATTERN",
+                 {"motif": candidate_motif.tolist()},
+                 prog,
+                 f"Tile constant {candidate_motif.shape} pattern to match input dims")]
+
 def induce_draw_line(train: List[Tuple[Grid, Grid]], bg: int = 0) -> List[Rule]:
     """Learn line drawing parameters. Beam-compatible version."""
     if not train:
@@ -1040,3 +1223,44 @@ def induce_parity_beam(train: List[Tuple[Grid, Grid]]) -> List[Rule]:
                               f"Recolor {parity} parity cells to {target_color} (anchor={(ar,ac)})"))
 
     return rules
+
+def induce_border_paint(train: List[Tuple[Grid, Grid]]) -> List[Rule]:
+    """
+    Learn border paint rule. Beam-compatible version.
+    Returns list of matching border paint rules.
+    """
+    if not train:
+        return []
+
+    # Must have same shape
+    for x, y in train:
+        if x.shape != y.shape:
+            return []
+
+    # Infer border color from first pair
+    x0, y0 = train[0]
+    H, W = y0.shape
+
+    # Create border mask
+    border = np.zeros_like(y0, dtype=bool)
+    border[0, :] = True      # Top edge
+    border[-1, :] = True     # Bottom edge
+    border[:, 0] = True      # Left edge
+    border[:, -1] = True     # Right edge
+
+    if not np.any(border):
+        return []
+
+    border_colors = y0[border]
+    if border_colors.size == 0:
+        return []
+
+    target_color = int(Counter(border_colors.tolist()).most_common(1)[0][0])
+    prog = BORDER_PAINT(target_color)
+
+    if all(exact_equals(prog(x), y) for x, y in train):
+        return [Rule("BORDER_PAINT",
+                    {"color": target_color},
+                    prog,
+                    f"Paint border with color {target_color}")]
+    return []

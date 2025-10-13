@@ -323,6 +323,43 @@ def test_tile_simple():
 
     print("✓ test_tile_simple passed")
 
+def test_tile_const_pattern():
+    """Test TILE_CONST_PATTERN rule induction (constant output pattern)."""
+    # Output is always tiled [[5,6],[7,8]], sized to match input dimensions
+    # This tests input-independent constant pattern tiling
+
+    # Train pair 1: Input [[1,1],[0,0]] → Output [[5,6],[7,8]]
+    # Input content irrelevant, only size matters
+    x1 = G([[1,1],
+            [0,0]])
+    y1 = G([[5,6],
+            [7,8]])
+
+    # Train pair 2: Input [[2,2,2,2],[0,0,0,0]] → Output [[5,6,5,6],[7,8,7,8]]
+    # Different input content, same motif pattern
+    x2 = G([[2,2,2,2],
+            [0,0,0,0]])
+    y2 = G([[5,6,5,6],
+            [7,8,7,8]])
+
+    inst = ARCInstance(
+        "tile_const_pattern",
+        train=[(x1, y1), (x2, y2)],
+        test_in=[G([[3,3,3,3,3,3],
+                    [9,9,9,9,9,9]])],
+        test_out=[G([[5,6,5,6,5,6],
+                     [7,8,7,8,7,8]])]
+    )
+
+    res = solve_instance(inst)
+
+    assert res.rule is not None, "TILE_CONST_PATTERN rule should be found"
+    assert res.rule.name == "TILE_CONST_PATTERN", f"Expected TILE_CONST_PATTERN, got {res.rule.name}"
+    assert res.acc_exact == 1.0, f"Expected 100% accuracy, got {res.acc_exact}"
+    assert res.receipts[0].residual == 0, f"Expected residual=0, got {res.receipts[0].residual}"
+
+    print("✓ test_tile_const_pattern passed")
+
 def test_draw_line_horizontal():
     """Test DRAW_LINE rule induction (horizontal line)."""
     # Draw horizontal line at row 1
@@ -419,6 +456,42 @@ def test_parity_recolor():
 
     print("✓ test_parity_recolor passed")
 
+def test_border_paint():
+    """Test BORDER_PAINT rule induction."""
+    # Paint border with color 9
+    x = G([[1,2,3,4],
+           [5,6,7,8],
+           [9,1,2,3],
+           [4,5,6,7]])
+    # Border cells painted with 9, interior unchanged
+    y = G([[9,9,9,9],
+           [9,6,7,9],
+           [9,1,2,9],
+           [9,9,9,9]])
+
+    inst = ARCInstance(
+        "border_paint",
+        train=[(x, y)],
+        test_in=[G([[1,1,1,1],
+                    [2,2,2,2],
+                    [3,3,3,3],
+                    [4,4,4,4]])],
+        test_out=[G([[9,9,9,9],
+                     [9,2,2,9],
+                     [9,3,3,9],
+                     [9,9,9,9]])]
+    )
+
+    res = solve_instance(inst)
+
+    assert res.rule is not None, "BORDER_PAINT rule should be found"
+    assert res.rule.name == "BORDER_PAINT", f"Expected BORDER_PAINT, got {res.rule.name}"
+    assert res.rule.params["color"] == 9, f"Expected color 9, got {res.rule.params['color']}"
+    assert res.acc_exact == 1.0, f"Expected 100% accuracy, got {res.acc_exact}"
+    assert res.receipts[0].residual == 0, f"Expected residual=0, got {res.receipts[0].residual}"
+
+    print("✓ test_border_paint passed")
+
 def test_copy_chain():
     """Test COPY_OBJ_RANK with repetition chains (k>1)."""
     # Simple test: Copy object 2 times with spacing
@@ -464,11 +537,13 @@ def run_all_tests():
 
     print("\nRunning Tiling & Drawing Tests...")
     test_tile_simple()
+    test_tile_const_pattern()
     test_draw_line_horizontal()
     test_draw_line_vertical()
 
     print("\nRunning Parity & Repetition Tests...")
     test_parity_recolor()
+    test_border_paint()
     test_copy_chain()
 
     print("\nRunning Beam Search Tests...")

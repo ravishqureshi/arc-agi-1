@@ -135,3 +135,34 @@ def FLOOD_FILL(start_r: int, start_c: int, new_color: int) -> Callable[[Grid], G
         return out
 
     return f
+
+def BORDER_PAINT(color: int) -> Callable[[Grid], Grid]:
+    """
+    Paint the outer border of the grid with a constant color.
+
+    Args:
+        color: Color to paint the border
+
+    Returns:
+        Function that paints the grid border
+
+    Example:
+        >>> prog = BORDER_PAINT(9)
+        >>> grid = G([[1,2,3],[4,5,6],[7,8,9]])
+        >>> result = prog(grid)
+        # Border (outer cells) painted with color 9:
+        # [[9,9,9],[9,5,9],[9,9,9]]
+    """
+    def f(z: Grid) -> Grid:
+        out = z.copy()
+        H, W = out.shape
+
+        # Paint all four edges
+        out[0, :] = color      # Top edge
+        out[-1, :] = color     # Bottom edge
+        out[:, 0] = color      # Left edge
+        out[:, -1] = color     # Right edge
+
+        return out
+
+    return f
