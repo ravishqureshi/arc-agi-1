@@ -85,3 +85,61 @@ def MASK_OBJ_RANK(rank: int = 0, group: str = 'global', bg: int = 0) -> Callable
         return m
 
     return f
+
+def PARITY_MASK(parity: str = 'even', anchor: tuple = (0, 0)) -> Callable[[Grid], Mask]:
+    """
+    Create checkerboard-style parity mask.
+
+    Args:
+        parity: 'even' or 'odd' - selects alternating cells
+        anchor: (r, c) anchor position for parity calculation
+
+    Returns:
+        Function that creates parity mask
+
+    Example:
+        >>> # Select even parity cells (checkerboard pattern)
+        >>> mask_fn = PARITY_MASK(parity='even', anchor=(0,0))
+        >>> m = mask_fn(grid)
+        >>> # m[r,c] = True if (r+c - anchor_r - anchor_c) is even
+    """
+    assert parity in ('even', 'odd'), f"parity must be 'even' or 'odd', got {parity}"
+    ar, ac = anchor
+
+    def f(z: Grid) -> Mask:
+        H, W = z.shape
+        rr, cc = np.indices((H, W))
+        # Parity mask: (r+c - ar - ac) is even
+        parity_mask = ((rr + cc - ar - ac) & 1) == 0
+        if parity == 'odd':
+            parity_mask = ~parity_mask
+        return parity_mask
+
+    return f
+
+def RECOLOR_PARITY(color: int, parity: str = 'even', anchor: tuple = (0, 0)) -> Callable[[Grid], Grid]:
+    """
+    Recolor cells matching parity pattern to a constant color.
+
+    Args:
+        color: Target color for parity cells
+        parity: 'even' or 'odd' - selects alternating cells
+        anchor: (r, c) anchor position for parity calculation
+
+    Returns:
+        Function that recolors parity cells
+
+    Example:
+        >>> # Recolor even parity cells to color 9
+        >>> prog = RECOLOR_PARITY(color=9, parity='even', anchor=(0,0))
+        >>> output = prog(input_grid)
+    """
+    mask_fn = PARITY_MASK(parity, anchor)
+
+    def f(z: Grid) -> Grid:
+        out = z.copy()
+        m = mask_fn(z)
+        out[m] = color
+        return out
+
+    return f

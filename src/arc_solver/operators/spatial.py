@@ -27,10 +27,11 @@ def in_bounds(r: int, c: int, H: int, W: int) -> bool:
     return 0 <= r < H and 0 <= c < W
 
 def MOVE_OBJ_RANK(rank: int, delta: Tuple[int, int], group: str = 'global',
-                  clear: bool = True, bg: int = 0) -> Callable[[Grid], Grid]:
+                  clear: bool = True, bg: int = 0, k: int = 1) -> Callable[[Grid], Grid]:
     """
     Find the rank-th object(s) (global or per-color largest), translate by delta=(dr,dc).
     If clear=True, erase source pixels (move). Else, leave source (copy/paste).
+    If k>1, create a chain of k copies at positions delta, 2*delta, ..., k*delta.
 
     Args:
         rank: Object rank (0=largest, 1=second largest, etc.)
@@ -38,9 +39,15 @@ def MOVE_OBJ_RANK(rank: int, delta: Tuple[int, int], group: str = 'global',
         group: 'global' ranks all objects by size, 'per_color' ranks within each color
         clear: If True, erase source (MOVE). If False, keep source (COPY).
         bg: Background color to use when erasing
+        k: Number of repetitions (k=1 for single move/copy, k>1 for chains)
 
     Returns:
         Callable that applies the transformation to a grid
+
+    Example:
+        >>> # Move largest object by (0,2), repeat 3 times: creates chain at (0,2), (0,4), (0,6)
+        >>> prog = MOVE_OBJ_RANK(rank=0, delta=(0,2), group='global', clear=True, k=3)
+        >>> output = prog(input_grid)
     """
     dr, dc = delta
     def f(z: Grid) -> Grid:
@@ -58,37 +65,39 @@ def MOVE_OBJ_RANK(rank: int, delta: Tuple[int, int], group: str = 'global',
             for _, ord_list in ranks.items():
                 if rank < len(ord_list):
                     idx_list.append(ord_list[rank])
+
         for idx in idx_list:
             obj = objs[idx]
-            # compute new positions; discard any pixel falling out of bounds
-            new_pix = []
-            for (r, c) in obj.pixels:
-                nr, nc = r + dr, c + dc
-                if in_bounds(nr, nc, *z.shape):
-                    new_pix.append((nr, nc))
             # clear source if move
             if clear:
                 for (r, c) in obj.pixels:
                     out[r, c] = bg
-            # paste
-            for (nr, nc) in new_pix:
-                out[nr, nc] = obj.color
+
+            # paste chain: repeat k times at delta, 2*delta, ..., k*delta
+            for t in range(1, k + 1):
+                for (r, c) in obj.pixels:
+                    nr, nc = r + dr * t, c + dc * t
+                    if in_bounds(nr, nc, *z.shape):
+                        out[nr, nc] = obj.color  # target wins collision handling
+
         return out
     return f
 
 def COPY_OBJ_RANK(rank: int, delta: Tuple[int, int], group: str = 'global',
-                  bg: int = 0) -> Callable[[Grid], Grid]:
+                  bg: int = 0, k: int = 1) -> Callable[[Grid], Grid]:
     """
     Copy the rank-th object(s) by delta, keeping the source.
     Equivalent to MOVE_OBJ_RANK with clear=False.
+    If k>1, create a chain of k copies.
 
     Args:
         rank: Object rank (0=largest, 1=second largest, etc.)
         delta: Translation offset (dr, dc)
         group: 'global' ranks all objects by size, 'per_color' ranks within each color
         bg: Background color (for consistency with MOVE)
+        k: Number of repetitions (k=1 for single copy, k>1 for chains)
 
     Returns:
         Callable that applies the transformation to a grid
     """
-    return MOVE_OBJ_RANK(rank, delta, group=group, clear=False, bg=bg)
+    return MOVE_OBJ_RANK(rank, delta, group=group, clear=False, bg=bg, k=k)

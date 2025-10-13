@@ -383,6 +383,72 @@ def test_draw_line_vertical():
 
     print("✓ test_draw_line_vertical passed")
 
+def test_parity_recolor():
+    """Test RECOLOR_PARITY rule induction (checkerboard pattern)."""
+    # Recolor even parity cells to color 9
+    # Key: Same color (1) appears in both even and odd positions, mapping differently
+    # COLOR_PERM cannot handle this (one color → two different values)
+    x = G([[1,1,1,1],
+           [2,2,2,2],
+           [1,1,1,1]])
+    # Even parity (r+c even) cells → 9, odd parity cells stay same
+    # Color 1 at (0,0),(0,2),(1,1),(1,3),(2,0),(2,2) → stays at (0,1),(0,3),(2,1),(2,3)
+    y = G([[9,1,9,1],
+           [2,9,2,9],
+           [9,1,9,1]])
+
+    inst = ARCInstance(
+        "parity_even",
+        train=[(x, y)],
+        test_in=[G([[3,3,3,3],
+                    [4,4,4,4],
+                    [3,3,3,3]])],
+        test_out=[G([[9,3,9,3],
+                     [4,9,4,9],
+                     [9,3,9,3]])]
+    )
+
+    res = solve_instance(inst)
+
+    assert res.rule is not None, "RECOLOR_PARITY rule should be found"
+    assert res.rule.name == "RECOLOR_PARITY", f"Expected RECOLOR_PARITY, got {res.rule.name}"
+    assert res.rule.params["parity"] == "even", f"Expected even parity, got {res.rule.params['parity']}"
+    assert res.rule.params["color"] == 9, f"Expected color 9, got {res.rule.params['color']}"
+    assert res.acc_exact == 1.0, f"Expected 100% accuracy, got {res.acc_exact}"
+    assert res.receipts[0].residual == 0, f"Expected residual=0, got {res.receipts[0].residual}"
+
+    print("✓ test_parity_recolor passed")
+
+def test_copy_chain():
+    """Test COPY_OBJ_RANK with repetition chains (k>1)."""
+    # Simple test: Copy object 2 times with spacing
+    # Original at (0,0), copies at (0,3), (0,6)
+    x = G([[1,0,0,0,0,0,0,0,0],
+           [1,0,0,0,0,0,0,0,0]])
+    # k=2: Creates 2 additional copies at delta=(0,3), 2*delta=(0,6)
+    y = G([[1,0,0,1,0,0,1,0,0],
+           [1,0,0,1,0,0,1,0,0]])
+
+    inst = ARCInstance(
+        "copy_chain_k2",
+        train=[(x, y)],
+        test_in=[G([[2,0,0,0,0,0,0,0,0],
+                    [2,0,0,0,0,0,0,0,0]])],
+        test_out=[G([[2,0,0,2,0,0,2,0,0],
+                     [2,0,0,2,0,0,2,0,0]])]
+    )
+
+    res = solve_instance(inst)
+
+    assert res.rule is not None, "COPY_OBJ_RANK rule should be found"
+    assert res.rule.name == "COPY_OBJ_RANK", f"Expected COPY_OBJ_RANK, got {res.rule.name}"
+    assert res.rule.params["delta"] == (0, 3), f"Expected delta (0,3), got {res.rule.params['delta']}"
+    assert res.rule.params["k"] == 2, f"Expected k=2, got {res.rule.params['k']}"
+    assert res.acc_exact == 1.0, f"Expected 100% accuracy, got {res.acc_exact}"
+    assert res.receipts[0].residual == 0, f"Expected residual=0, got {res.receipts[0].residual}"
+
+    print("✓ test_copy_chain passed")
+
 def run_all_tests():
     """Run all unit tests."""
     print("Running ARC Solver Unit Tests...")
@@ -400,6 +466,10 @@ def run_all_tests():
     test_tile_simple()
     test_draw_line_horizontal()
     test_draw_line_vertical()
+
+    print("\nRunning Parity & Repetition Tests...")
+    test_parity_recolor()
+    test_copy_chain()
 
     print("\nRunning Beam Search Tests...")
     test_beam_rot_then_crop()

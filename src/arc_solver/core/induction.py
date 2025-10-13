@@ -9,7 +9,7 @@ from .types import Grid
 from .invariants import exact_equals, connected_components, rank_objects
 from ..operators.symmetry import ROT, FLIP
 from ..operators.spatial import CROP, BBOX, CROP_BBOX_NONZERO, MOVE_OBJ_RANK, COPY_OBJ_RANK
-from ..operators.masks import KEEP, MASK_NONZERO, MASK_OBJ_RANK
+from ..operators.masks import KEEP, MASK_NONZERO, MASK_OBJ_RANK, PARITY_MASK, RECOLOR_PARITY
 from ..operators.color import COLOR_PERM, infer_color_mapping, merge_mappings
 from ..operators.tiling import TILE, TILE_SUBGRID
 from ..operators.drawing import DRAW_LINE, DRAW_BOX, FLOOD_FILL
@@ -396,26 +396,36 @@ def induce_move_or_copy_obj_rank(train: List[Tuple[Grid, Grid]],
     sorted_deltas = sorted(common_deltas, key=lambda d: abs(d[0]) + abs(d[1]))
 
     for delta in sorted_deltas:
-        # Test MOVE then COPY
-        move_prog = MOVE_OBJ_RANK(rank, delta, group=group, clear=True, bg=bg)
-        if all(exact_equals(move_prog(x), y) for x, y in train):
-            return Rule("MOVE_OBJ_RANK", {
-                "rank": rank,
-                "group": group,
-                "delta": delta,
-                "clear": True,
-                "bg": bg
-            }, move_prog)
+        # Try different repetition counts (k=1 for single, k>1 for chains)
+        for k in range(1, 6):
+            # Test MOVE then COPY with repetition count k
+            move_prog = MOVE_OBJ_RANK(rank, delta, group=group, clear=True, bg=bg, k=k)
+            if all(exact_equals(move_prog(x), y) for x, y in train):
+                pce = f"Move {rank}-th {group} by Δ={delta}"
+                if k > 1:
+                    pce += f" (chain k={k})"
+                return Rule("MOVE_OBJ_RANK", {
+                    "rank": rank,
+                    "group": group,
+                    "delta": delta,
+                    "clear": True,
+                    "bg": bg,
+                    "k": k
+                }, move_prog, pce)
 
-        copy_prog = COPY_OBJ_RANK(rank, delta, group=group, bg=bg)
-        if all(exact_equals(copy_prog(x), y) for x, y in train):
-            return Rule("COPY_OBJ_RANK", {
-                "rank": rank,
-                "group": group,
-                "delta": delta,
-                "clear": False,
-                "bg": bg
-            }, copy_prog)
+            copy_prog = COPY_OBJ_RANK(rank, delta, group=group, bg=bg, k=k)
+            if all(exact_equals(copy_prog(x), y) for x, y in train):
+                pce = f"Copy {rank}-th {group} by Δ={delta}"
+                if k > 1:
+                    pce += f" (chain k={k})"
+                return Rule("COPY_OBJ_RANK", {
+                    "rank": rank,
+                    "group": group,
+                    "delta": delta,
+                    "clear": False,
+                    "bg": bg,
+                    "k": k
+                }, copy_prog, pce)
 
     return None  # No delta worked with MOVE or COPY
 
@@ -544,6 +554,60 @@ def induce_draw_line_rule(train: List[Tuple[Grid, Grid]], bg: int = 0) -> Option
 
     return None
 
+def induce_parity_recolor(train: List[Tuple[Grid, Grid]]) -> Optional[Rule]:
+    """
+    Learn parity recoloring from training pairs.
+
+    Hypothesis: Output == input except parity cells recolored to constant color.
+    Try both 'even' and 'odd' parity with different anchors.
+
+    Strategy:
+    1. Infer parity (even/odd) and anchor from first pair
+    2. Detect target color (most common in parity cells)
+    3. Verify across ALL train pairs (residual=0)
+
+    Returns:
+        Rule if pattern matches, else None
+    """
+    if not train:
+        return None
+
+    # Must have same shape
+    for x, y in train:
+        if x.shape != y.shape:
+            return None
+
+    # Try both parity types
+    for parity in ('even', 'odd'):
+        # Try minimal anchor variations (0 or 1 shifts)
+        for ar in range(2):
+            for ac in range(2):
+                # Infer color from first pair
+                x0, y0 = train[0]
+                mask_fn = PARITY_MASK(parity, (ar, ac))
+                m = mask_fn(x0)
+
+                if not np.any(m):
+                    continue
+
+                # Get target color (most common in parity cells of output)
+                vals = y0[m]
+                if vals.size == 0:
+                    continue
+
+                target_color = int(Counter(vals.tolist()).most_common(1)[0][0])
+
+                # Build program and verify on all pairs
+                prog = RECOLOR_PARITY(target_color, parity, (ar, ac))
+
+                if all(exact_equals(prog(x), y) for x, y in train):
+                    return Rule("RECOLOR_PARITY",
+                              {"color": target_color, "parity": parity, "anchor": (ar, ac)},
+                              prog,
+                              f"Recolor {parity} parity cells to {target_color} (anchor={(ar,ac)})")
+
+    return None
+
 # Try rules in order of simplicity (Occam's razor)
 # Principle: Try more specific/constrained operations before general ones
 CATALOG = [
@@ -551,6 +615,7 @@ CATALOG = [
     induce_color_perm_rule,
     induce_crop_nonzero_rule,
     induce_keep_nonzero_rule,
+    induce_parity_recolor,  # Parity-based recoloring (checkerboard patterns)
     # Object rank rules (try common patterns) - More specific than tiling
     lambda train: induce_recolor_obj_rank(train, rank=0, group='global', bg=0),
     lambda train: induce_recolor_obj_rank(train, rank=0, group='per_color', bg=0),
@@ -803,17 +868,27 @@ def induce_move_copy(train: List[Tuple[Grid, Grid]], rank: int = 0, group: str =
 
     out = []
     for delta in sorted_deltas:
-        move_prog = MOVE_OBJ_RANK(rank, delta, group=group, clear=True, bg=bg)
-        if all(exact_equals(move_prog(x), y) for x, y in train):
-            target = "largest" if rank == 0 else f"rank {rank}"
-            out.append(Rule("MOVE_OBJ_RANK", {"rank": rank, "group": group, "delta": delta, "clear": True, "bg": bg},
-                          move_prog, f"Move {target} {group} by Δ={delta}"))
+        # Try different repetition counts (k=1 for single, k>1 for chains)
+        for k in range(1, 6):
+            move_prog = MOVE_OBJ_RANK(rank, delta, group=group, clear=True, bg=bg, k=k)
+            if all(exact_equals(move_prog(x), y) for x, y in train):
+                target = "largest" if rank == 0 else f"rank {rank}"
+                pce = f"Move {target} {group} by Δ={delta}"
+                if k > 1:
+                    pce += f" (chain k={k})"
+                out.append(Rule("MOVE_OBJ_RANK",
+                              {"rank": rank, "group": group, "delta": delta, "clear": True, "bg": bg, "k": k},
+                              move_prog, pce))
 
-        copy_prog = COPY_OBJ_RANK(rank, delta, group=group, bg=bg)
-        if all(exact_equals(copy_prog(x), y) for x, y in train):
-            target = "largest" if rank == 0 else f"rank {rank}"
-            out.append(Rule("COPY_OBJ_RANK", {"rank": rank, "group": group, "delta": delta, "clear": False, "bg": bg},
-                          copy_prog, f"Copy {target} {group} by Δ={delta}"))
+            copy_prog = COPY_OBJ_RANK(rank, delta, group=group, bg=bg, k=k)
+            if all(exact_equals(copy_prog(x), y) for x, y in train):
+                target = "largest" if rank == 0 else f"rank {rank}"
+                pce = f"Copy {target} {group} by Δ={delta}"
+                if k > 1:
+                    pce += f" (chain k={k})"
+                out.append(Rule("COPY_OBJ_RANK",
+                              {"rank": rank, "group": group, "delta": delta, "clear": False, "bg": bg, "k": k},
+                              copy_prog, pce))
 
     return out
 
@@ -920,3 +995,48 @@ def induce_draw_line(train: List[Tuple[Grid, Grid]], bg: int = 0) -> List[Rule]:
                    f"Draw line from ({r0},{c0}) to ({r1},{c1}) with color {line_color}")]
 
     return []
+
+def induce_parity_beam(train: List[Tuple[Grid, Grid]]) -> List[Rule]:
+    """
+    Learn parity recoloring from training pairs. Beam-compatible version.
+    Returns all matching parity patterns.
+    """
+    if not train:
+        return []
+
+    # Must have same shape
+    for x, y in train:
+        if x.shape != y.shape:
+            return []
+
+    rules = []
+    # Try both parity types
+    for parity in ('even', 'odd'):
+        # Try minimal anchor variations (0 or 1 shifts)
+        for ar in range(2):
+            for ac in range(2):
+                # Infer color from first pair
+                x0, y0 = train[0]
+                mask_fn = PARITY_MASK(parity, (ar, ac))
+                m = mask_fn(x0)
+
+                if not np.any(m):
+                    continue
+
+                # Get target color (most common in parity cells of output)
+                vals = y0[m]
+                if vals.size == 0:
+                    continue
+
+                target_color = int(Counter(vals.tolist()).most_common(1)[0][0])
+
+                # Build program and verify on all pairs
+                prog = RECOLOR_PARITY(target_color, parity, (ar, ac))
+
+                if all(exact_equals(prog(x), y) for x, y in train):
+                    rules.append(Rule("RECOLOR_PARITY",
+                              {"color": target_color, "parity": parity, "anchor": (ar, ac)},
+                              prog,
+                              f"Recolor {parity} parity cells to {target_color} (anchor={(ar,ac)})"))
+
+    return rules
