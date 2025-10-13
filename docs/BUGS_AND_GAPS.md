@@ -231,6 +231,45 @@ _None currently identified_
 
 ---
 
+### Beam Search Migration Success (2025-10-13)
+
+**Result:** Added beam search for multi-step compositions. Infrastructure complete, 0 new tasks solved (expected).
+
+**What worked:**
+1. **Refactored induction** - Changed from `Optional[Rule]` to `List[Rule]` for beam compatibility
+2. **Added PCE field** - All rules now have Proof-Carrying English explanations
+3. **Universal primitives** - Generate ROT, FLIP, CROP, KEEP regardless of train match
+4. **Beam search** - Composese primitives up to depth K, prunes on residual increase
+5. **Comprehensive tests** - 3 beam-specific unit tests, all passing
+
+**Architecture changes:**
+- Added to `induction.py`: 7 new beam-compatible induction functions (+350 LOC)
+- Added to `solver.py`: Node, compose, beam_search, solve_with_beam (+160 LOC)
+- Updated `Rule` dataclass: added `pce` field
+- Added 3 unit tests to `test_arc_solver.py`
+
+**Impact:**
+- Accuracy: 12/1076 → 12/1076 (no change, expected)
+- Tasks: Same 12 tasks
+- Multi-step: ROT90 → CROP composition verified in tests
+- **Infrastructure ready** for Phase 1 operators
+
+**Why no improvement:**
+- Only 10 primitive operations available
+- Multi-step compositions like "ROT90 → CROP" are rare in ARC
+- Real gains will come when we add Phase 1 operators (SHIFT, TILE, PASTE, etc.)
+- Beam search is FOUNDATIONAL - will be critical when operator catalog grows
+
+**Learnings:**
+- Beam search works correctly (tests pass, compositions verified)
+- Universal primitive generation is key for multi-step search
+- Need 60-80 operators (Phase 1) before beam search shows coverage gains
+- Test on first 50 tasks: single-step 1/50, beam 1/50 (0 beam-only wins)
+
+**Next:** Add remaining legacy rules (2), then jump to Phase 1 high-impact operators.
+
+---
+
 ## Update Protocol
 
 **When to add entries:**
@@ -270,7 +309,7 @@ _None currently identified_
 ---
 
 **Last Updated:** 2025-10-13
-**Current Coverage:** 12/1076 (1.1%)
+**Current Coverage:** 12/1076 (1.12%)
 **Critical Bugs:** 0 open, 3 fixed
-**Open Gaps:** 2 legacy rules, performance optimizations
-**Recent Change:** Added MOVE/COPY operators (+1 task, 2 bugs fixed)
+**Open Gaps:** 2 legacy rules, beam search ready but needs more operators
+**Recent Change:** Added beam search for multi-step compositions (infrastructure ready, 0 new tasks)

@@ -34,6 +34,7 @@ from .solver import (
     SolveResult,
     pce_for_rule,
     solve_instance,
+    solve_with_beam,
 )
 
 __all__ = [
@@ -50,5 +51,5 @@ __all__ = [
     'Rule', 'induce_symmetry_rule', 'induce_crop_nonzero_rule',
     'induce_keep_nonzero_rule', 'CATALOG', 'induce_rule',
     # Solver
-    'ARCInstance', 'SolveResult', 'pce_for_rule', 'solve_instance',
+    'ARCInstance', 'SolveResult', 'pce_for_rule', 'solve_instance', 'solve_with_beam',
 ]

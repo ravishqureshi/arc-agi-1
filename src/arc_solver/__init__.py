@@ -34,7 +34,7 @@ from .core import (
     # Induction
     Rule, CATALOG, induce_rule,
     # Solver
-    ARCInstance, SolveResult, solve_instance,
+    ARCInstance, SolveResult, solve_instance, solve_with_beam,
 )
 
 # Operator exports
@@ -64,7 +64,7 @@ __all__ = [
     # Induction
     'Rule', 'CATALOG', 'induce_rule',
     # Solver
-    'ARCInstance', 'SolveResult', 'solve_instance',
+    'ARCInstance', 'SolveResult', 'solve_instance', 'solve_with_beam',
     # Operators
     'ROT', 'FLIP', 'BBOX', 'CROP', 'CROP_BBOX_NONZERO',
     'MASK_COLOR', 'MASK_NONZERO', 'KEEP', 'REMOVE', 'ON', 'SEQ',

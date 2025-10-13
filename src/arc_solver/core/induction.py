@@ -20,6 +20,7 @@ class Rule:
     name: str
     params: dict
     prog: Callable[[Grid], Grid]
+    pce: str = ""  # Proof-Carrying English explanation
 
 def induce_symmetry_rule(train: List[Tuple[Grid, Grid]]) -> Optional[Rule]:
     """Try pure symmetry transforms that exactly map all train pairs."""
@@ -439,3 +440,248 @@ def induce_rule(train: List[Tuple[Grid, Grid]]) -> Optional[Rule]:
         if rule is not None:
             return rule
     return None
+
+# =============================================================================
+# Beam Search Compatible Induction (returns List[Rule])
+# =============================================================================
+
+def induce_symmetry(train: List[Tuple[Grid, Grid]]) -> List[Rule]:
+    """Try all symmetry transforms that exactly map train pairs. Returns list of ALL matches."""
+    candidates = [
+        ("ROT", {"k": 0}, ROT(0), "Identity (0°)"),
+        ("ROT", {"k": 1}, ROT(1), "Rotate 90°"),
+        ("ROT", {"k": 2}, ROT(2), "Rotate 180°"),
+        ("ROT", {"k": 3}, ROT(3), "Rotate 270°"),
+        ("FLIP", {"axis": "h"}, FLIP('h'), "Flip horizontal"),
+        ("FLIP", {"axis": "v"}, FLIP('v'), "Flip vertical"),
+    ]
+    out = []
+    for name, params, prog, pce_text in candidates:
+        if all(exact_equals(prog(x), y) for x, y in train):
+            out.append(Rule(name, params, prog, pce_text + " (exact on train)"))
+    return out
+
+def induce_crop_bbox(train: List[Tuple[Grid, Grid]], bg: int = 0) -> List[Rule]:
+    """Try crop-to-bbox of nonzero content."""
+    prog = CROP(BBOX(bg))
+    if all(exact_equals(prog(x), y) for x, y in train):
+        return [Rule("CROP_BBOX_NONZERO", {"bg": bg}, prog, "Crop to bbox of non-zero")]
+    return []
+
+def induce_keep_nonzero(train: List[Tuple[Grid, Grid]], bg: int = 0) -> List[Rule]:
+    """Try keep-nonzero (remove background) rule."""
+    prog = KEEP(MASK_NONZERO(bg))
+    if all(exact_equals(prog(x), y) for x, y in train):
+        return [Rule("KEEP_NONZERO", {"bg": bg}, prog, "Keep non-zero")]
+    return []
+
+def induce_color_perm(train: List[Tuple[Grid, Grid]]) -> List[Rule]:
+    """Learn global color permutation from training pairs."""
+    if not train:
+        return []
+
+    x0, y0 = train[0]
+    mapping = infer_color_mapping(x0, y0)
+
+    if not mapping:
+        return []
+
+    prog = COLOR_PERM(mapping)
+
+    if all(exact_equals(prog(x), y) for x, y in train):
+        pairs = ', '.join(f"{k}→{v}" for k, v in sorted(mapping.items()))
+        return [Rule("COLOR_PERM", {"mapping": mapping}, prog, f"Color permutation {pairs}")]
+    return []
+
+def induce_recolor_obj_rank_beam(train: List[Tuple[Grid, Grid]], rank: int = 0, group: str = 'global', bg: int = 0) -> List[Rule]:
+    """Learn object-rank recolor rule. Beam-compatible version."""
+    if not train:
+        return []
+
+    # Shape must match
+    for x, y in train:
+        if x.shape != y.shape:
+            return []
+
+    if group == 'global':
+        target_color = None
+        for x, y in train:
+            mask_fn = MASK_OBJ_RANK(rank=rank, group=group, bg=bg)
+            m = mask_fn(x)
+            if not np.any(m):
+                return []
+            vals = y[m]
+            if vals.size == 0:
+                return []
+            c = int(Counter(vals.tolist()).most_common(1)[0][0])
+            if target_color is None:
+                target_color = c
+            elif target_color != c:
+                return []
+
+        def recolor_prog(z: Grid) -> Grid:
+            m = MASK_OBJ_RANK(rank=rank, group=group, bg=bg)(z)
+            out = z.copy()
+            out[m] = target_color
+            return out
+
+        if all(exact_equals(recolor_prog(x), y) for x, y in train):
+            scope = "globally" if group == 'global' else "per color"
+            target = "largest" if rank == 0 else f"rank {rank}"
+            return [Rule("RECOLOR_OBJ_RANK", {"rank": rank, "group": group, "color": target_color, "bg": bg},
+                        recolor_prog, f"Recolor {target} {scope}→{target_color}")]
+    else:
+        # per_color logic (similar to existing)
+        color_map = {}
+        for x, y in train:
+            objs = connected_components(x, bg)
+            if not objs:
+                return []
+            ranks = rank_objects(objs, group='per_color', by='size')
+            for src_color, order in ranks.items():
+                if rank >= len(order):
+                    continue
+                obj_idx = order[rank]
+                obj = objs[obj_idx]
+                tgt_colors = set()
+                for r, c in obj.pixels:
+                    tgt_colors.add(int(y[r, c]))
+                if len(tgt_colors) != 1:
+                    return []
+                tgt_color = tgt_colors.pop()
+                if src_color in color_map:
+                    if color_map[src_color] != tgt_color:
+                        return []
+                else:
+                    color_map[src_color] = tgt_color
+
+        if not color_map:
+            return []
+
+        def recolor_prog_per_color(z: Grid) -> Grid:
+            out = z.copy()
+            objs = connected_components(z, bg)
+            if not objs:
+                return out
+            ranks = rank_objects(objs, group='per_color', by='size')
+            for src_color, order in ranks.items():
+                if rank >= len(order):
+                    continue
+                if src_color not in color_map:
+                    continue
+                obj_idx = order[rank]
+                obj = objs[obj_idx]
+                tgt_color = color_map[src_color]
+                for r, c in obj.pixels:
+                    out[r, c] = tgt_color
+            return out
+
+        if all(exact_equals(recolor_prog_per_color(x), y) for x, y in train):
+            target = "largest" if rank == 0 else f"rank {rank}"
+            mappings = ', '.join(f"{k}→{v}" for k, v in sorted(color_map.items()))
+            return [Rule("RECOLOR_OBJ_RANK", {"rank": rank, "group": group, "bg": bg, "color_map": color_map},
+                        recolor_prog_per_color, f"Recolor {target} per color: {mappings}")]
+    return []
+
+def induce_keep_topk(train: List[Tuple[Grid, Grid]], k: int = 2, bg: int = 0) -> List[Rule]:
+    """Keep top-k objects by size."""
+    for x, y in train:
+        if x.shape != y.shape:
+            return []
+
+    def keep_prog(z: Grid) -> Grid:
+        objs = connected_components(z, bg)
+        if not objs:
+            return np.zeros_like(z)
+        ranks = rank_objects(objs, group='global', by='size')
+        order = ranks["global"]
+        m = np.zeros_like(z, dtype=bool)
+        for rnk, idx in enumerate(order):
+            if rnk < k:
+                for (r, c) in objs[idx].pixels:
+                    m[r, c] = True
+        out = np.zeros_like(z)
+        out[m] = z[m]
+        return out
+
+    if all(exact_equals(keep_prog(x), y) for x, y in train):
+        return [Rule("KEEP_OBJ_TOPK", {"k": k, "bg": bg}, keep_prog, f"Keep top-{k} components")]
+    return []
+
+def induce_move_copy(train: List[Tuple[Grid, Grid]], rank: int = 0, group: str = 'global', bg: int = 0) -> List[Rule]:
+    """Infer MOVE/COPY operations with Δ enumeration. Beam-compatible version."""
+    if not train:
+        return []
+
+    # Collect ALL valid deltas per train pair
+    all_deltas_per_pair = []
+
+    for x, y in train:
+        if x.shape != y.shape:
+            return []
+
+        H, W = x.shape
+        Xobjs = connected_components(x, bg)
+        if not Xobjs:
+            return []
+        ranks_x = rank_objects(Xobjs, group=group)
+        idxs = []
+        if group == 'global':
+            ord_list = ranks_x["global"]
+            if rank >= len(ord_list):
+                return []
+            idxs = [ord_list[rank]]
+        else:
+            for _, ord_list in ranks_x.items():
+                if rank < len(ord_list):
+                    idxs = [ord_list[rank]]
+                    break
+            if not idxs:
+                return []
+
+        xi = idxs[0]
+        xmask = shape_mask(Xobjs, xi, H, W)
+        c = Xobjs[xi].color
+        sz = Xobjs[xi].size
+
+        Yobjs = connected_components(y, bg)
+        cand = [j for j, o in enumerate(Yobjs) if o.color == c and o.size == sz]
+        if not cand:
+            return []
+
+        valid_deltas_this_pair = []
+        for j in cand:
+            dx = int(round(Yobjs[j].centroid[0] - Xobjs[xi].centroid[0]))
+            dy = int(round(Yobjs[j].centroid[1] - Xobjs[xi].centroid[1]))
+            if (dx, dy) == (0, 0):
+                continue
+            ymask = shape_mask(Yobjs, j, H, W)
+            if np.array_equal(shift_mask(xmask, dx, dy), ymask):
+                valid_deltas_this_pair.append((dx, dy))
+
+        if not valid_deltas_this_pair:
+            return []
+
+        all_deltas_per_pair.append(set(valid_deltas_this_pair))
+
+    common_deltas = set.intersection(*all_deltas_per_pair)
+    if not common_deltas:
+        return []
+
+    sorted_deltas = sorted(common_deltas, key=lambda d: abs(d[0]) + abs(d[1]))
+
+    out = []
+    for delta in sorted_deltas:
+        move_prog = MOVE_OBJ_RANK(rank, delta, group=group, clear=True, bg=bg)
+        if all(exact_equals(move_prog(x), y) for x, y in train):
+            target = "largest" if rank == 0 else f"rank {rank}"
+            out.append(Rule("MOVE_OBJ_RANK", {"rank": rank, "group": group, "delta": delta, "clear": True, "bg": bg},
+                          move_prog, f"Move {target} {group} by Δ={delta}"))
+
+        copy_prog = COPY_OBJ_RANK(rank, delta, group=group, bg=bg)
+        if all(exact_equals(copy_prog(x), y) for x, y in train):
+            target = "largest" if rank == 0 else f"rank {rank}"
+            out.append(Rule("COPY_OBJ_RANK", {"rank": rank, "group": group, "delta": delta, "clear": False, "bg": bg},
+                          copy_prog, f"Copy {target} {group} by Δ={delta}"))
+
+    return out

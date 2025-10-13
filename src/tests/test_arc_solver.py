@@ -12,8 +12,10 @@ sys.path.insert(0, '/Users/ravishq/code/arc-agi-1/src')
 
 from arc_solver import (
     G, invariants, rot90, rot180, flip_h,
-    ARCInstance, solve_instance
+    ARCInstance, solve_instance, solve_with_beam
 )
+from arc_solver.operators.spatial import CROP_BBOX_NONZERO
+from arc_solver.operators.color import COLOR_PERM
 
 def test_invariants():
     """Test invariant detection."""
@@ -220,6 +222,75 @@ def test_delta_enumeration():
 
     print("✓ test_delta_enumeration passed")
 
+def test_beam_rot_then_crop():
+    """Test beam search: ROT90 → CROP_BBOX composition."""
+    # Train: rotate 90° then crop to bbox
+    a = G([[0,1,0],[0,0,1],[0,0,0]])
+    b = CROP_BBOX_NONZERO(0)(rot90(a))
+
+    # Test input
+    test_in = G([[0,2,0],[0,0,2],[0,0,0]])
+    test_out = CROP_BBOX_NONZERO(0)(rot90(test_in))
+
+    inst = ARCInstance(
+        "beam_rot_crop",
+        train=[(a, b)],
+        test_in=[test_in],
+        test_out=[test_out]
+    )
+
+    res = solve_with_beam(inst, max_depth=2, beam_size=20)
+
+    assert res.rule is not None, "Beam search should find solution"
+    assert res.acc_exact == 1.0, f"Expected 100% accuracy, got {res.acc_exact}"
+    assert res.receipts[0].residual == 0, f"Expected residual=0, got {res.receipts[0].residual}"
+
+    print("✓ test_beam_rot_then_crop passed")
+
+def test_beam_versus_single():
+    """Test that beam search can solve what single-step solver can."""
+    # Use a task that single-step solver solves
+    x = G([[0,1,0],[0,0,1],[0,0,0]])
+    y = rot90(x)
+
+    inst = ARCInstance(
+        "beam_vs_single",
+        train=[(x, y)],
+        test_in=[G([[0,2,0],[0,0,2],[0,0,0]])],
+        test_out=[rot90(G([[0,2,0],[0,0,2],[0,0,0]]))]
+    )
+
+    # Both should solve it
+    res_single = solve_instance(inst)
+    res_beam = solve_with_beam(inst, max_depth=2, beam_size=20)
+
+    assert res_single.acc_exact == 1.0, "Single-step should solve"
+    assert res_beam.acc_exact == 1.0, "Beam should also solve"
+    assert res_beam.receipts[0].residual == 0, f"Expected residual=0"
+
+    print("✓ test_beam_versus_single passed")
+
+def test_beam_single_step_fallback():
+    """Test beam search on single-step tasks (should still work)."""
+    # Single-step rot90 task
+    x = G([[0,1,0],[0,0,1],[0,0,0]])
+    y = rot90(x)
+
+    inst = ARCInstance(
+        "beam_single_rot90",
+        train=[(x, y)],
+        test_in=[G([[0,2,0],[0,0,2],[0,0,0]])],
+        test_out=[rot90(G([[0,2,0],[0,0,2],[0,0,0]]))]
+    )
+
+    res = solve_with_beam(inst, max_depth=2, beam_size=20)
+
+    assert res.rule is not None, "Beam search should find single-step solution"
+    assert res.acc_exact == 1.0, f"Expected 100% accuracy, got {res.acc_exact}"
+    assert res.receipts[0].residual == 0, f"Expected residual=0, got {res.receipts[0].residual}"
+
+    print("✓ test_beam_single_step_fallback passed")
+
 def run_all_tests():
     """Run all unit tests."""
     print("Running ARC Solver Unit Tests...")
@@ -232,6 +303,11 @@ def run_all_tests():
     test_move_obj_rank()
     test_copy_obj_rank()
     test_delta_enumeration()
+
+    print("\nRunning Beam Search Tests...")
+    test_beam_rot_then_crop()
+    test_beam_versus_single()
+    test_beam_single_step_fallback()
 
     print("=" * 50)
     print("All tests passed! ✅")
