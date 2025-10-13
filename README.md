@@ -5,6 +5,8 @@ Solving the Abstraction and Reasoning Corpus using mathematical principles.
 **Competition**: [ARC Prize 2025](https://www.kaggle.com/competitions/arc-prize-2025)
 **Goal**: Beat ARC AGI with numpy, scipy, and pure mathematics - no LLMs
 
+📚 **Quick Navigation:** See [docs/CONTEXT_INDEX.md](docs/CONTEXT_INDEX.md) for a complete map of all documentation and code.
+
 ## Project Structure
 
 ```
@@ -33,7 +35,25 @@ arc-agi-1/
 │
 ├── src/                           # Source code
 │   ├── universe_intelligence.py   # Core UI: ORDER/ENTROPY/QUADRATIC enrichments
-│   └── arc_demo.py                # Demo solver with receipts (4 rules)
+│   ├── arc_solver/                # Main ARC solver package (MODULAR)
+│   │   ├── __init__.py            # Main package exports
+│   │   ├── arc_solver_v1.py       # Monolithic starter (for reference)
+│   │   ├── core/                  # Core architecture
+│   │   │   ├── types.py           # Grid, Mask, ObjList types
+│   │   │   ├── invariants.py      # Invariant engine (histogram, components, symmetries)
+│   │   │   ├── receipts.py        # Edit bills, residual, PCE
+│   │   │   ├── induction.py       # Rule induction from train pairs
+│   │   │   └── solver.py          # Main solver harness
+│   │   ├── operators/             # DSL operators by family
+│   │   │   ├── symmetry.py        # ROT, FLIP
+│   │   │   ├── spatial.py         # CROP, BBOX
+│   │   │   ├── masks.py           # MASK_COLOR, MASK_NONZERO, KEEP, REMOVE
+│   │   │   └── composition.py     # ON, SEQ
+│   │   └── legacy/                # Previous implementations (reference only)
+│   │       └── arc_demo.py        # 6-rule demo (12/1000 solved)
+│   ├── tests/                     # Unit tests
+│   │   └── test_arc_solver.py     # Modular tests (ALL PASSING ✅)
+│   └── demos/                     # Demo scripts
 │
 ├── scripts/                       # Helper scripts
 │   └── build_notebook.py          # Auto-generate notebook from src/ (future)
@@ -156,11 +176,13 @@ gap, Ein, Ebd = ui.green_gap(L, dtn, boundary_values)  # gap ≈ 1e-14
 
 ### 2. `src/arc_demo.py` - Demo ARC Solver
 
-**Rule-based solver with 4 transformation rules:**
+**Rule-based solver with 6 transformation rules:**
 1. **Symmetry** - rot90/180/270, flip horizontal/vertical
 2. **Color permutation** - Global color mapping
 3. **Crop bbox** - Extract bounding box of non-zero content
-4. **Component recolor** - Recolor connected components by size
+4. **Move bbox to origin** - Move bounding box to top-left corner (preserves grid size)
+5. **Mirror left to right** - Mirror left half to right half (requires even width)
+6. **Component recolor** - Recolor connected components by size
 
 **Features:**
 - Learns from training pairs (exact match required)
@@ -240,8 +262,12 @@ source venv/bin/activate
 # Test Universe Intelligence framework
 python -c "import src.universe_intelligence as ui; print('✅ UI loaded')"
 
-# Run demo ARC solver
-python src/arc_demo.py
+# Run modular test suite
+python src/tests/test_arc_solver.py
+
+# Run legacy demos
+python src/arc_solver/legacy/arc_demo.py
+python src/arc_solver/arc_solver_v1.py
 
 # Explore training data
 python -c "import json; d=json.load(open('data/arc-agi_training_challenges.json')); print(f'{len(d)} training tasks')"

@@ -204,7 +204,60 @@ def induce_crop_bbox(train: List[Tuple[Grid,Grid]]) -> Optional[RuleResult]:
             return None
     return RuleResult(name="crop_bbox", params={"bg":0}, f=lambda z: crop_bbox(z, bg=0))
 
-# --- Rule 4: recolor components by size pattern learned on train
+# --- Rule 4: move bounding box to origin (top-left corner)
+def induce_move_bbox_to_origin(train: List[Tuple[Grid,Grid]], bg: int=0) -> Optional[RuleResult]:
+    """
+    Extract bounding box of non-zero content and move it to top-left corner (0,0).
+    Preserves original grid size, fills rest with background.
+
+    Different from crop_bbox: This maintains grid dimensions.
+    """
+    def move_to_origin(z: Grid) -> Grid:
+        r0, c0, r1, c1 = bbox_nonzero(z, bg)
+        sub = z[r0:r1+1, c0:c1+1]  # Extract bbox
+        out = np.full_like(z, bg)  # Fill with background
+        # Place bbox at origin
+        h, w = sub.shape
+        out[:h, :w] = sub
+        return out
+
+    # Verify exact match on all training pairs
+    for x, y in train:
+        if x.shape != y.shape:  # Shape must be preserved
+            return None
+        if not np.array_equal(move_to_origin(x), y):
+            return None
+
+    return RuleResult(name="move_bbox_to_origin", params={"bg":bg}, f=move_to_origin)
+
+# --- Rule 5: mirror left half to right half
+def induce_mirror_left_to_right(train: List[Tuple[Grid,Grid]]) -> Optional[RuleResult]:
+    """
+    Mirror the left half of the grid to the right half.
+    Requires even width.
+    """
+    def mirror_lr(z: Grid) -> Grid:
+        H, W = z.shape
+        if W % 2 != 0:  # Must have even width
+            raise ValueError(f"Grid width {W} is not even")
+        mid = W // 2
+        out = z.copy()
+        out[:, mid:] = np.fliplr(out[:, :mid])
+        return out
+
+    # Verify exact match on all training pairs
+    try:
+        for x, y in train:
+            if x.shape != y.shape:
+                return None
+            if not np.array_equal(mirror_lr(x), y):
+                return None
+        return RuleResult(name="mirror_left_to_right", params={}, f=mirror_lr)
+    except ValueError:
+        # Odd width grid
+        return None
+
+# --- Rule 6: recolor components by size pattern learned on train
 def induce_component_size_recolor(train: List[Tuple[Grid,Grid]]) -> Optional[RuleResult]:
     # For each input->output, learn a mapping from (color,size_rank) -> new_color
     mapping={}
@@ -246,6 +299,8 @@ CATALOG = [
     induce_symmetry,
     induce_color_perm,
     induce_crop_bbox,
+    induce_move_bbox_to_origin,
+    induce_mirror_left_to_right,
     induce_component_size_recolor,
 ]
 
