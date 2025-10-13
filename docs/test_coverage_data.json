@@ -1,17 +1,18 @@
 {
   "metadata": {
     "generated": "2025-10-13",
-    "solver_version": "Modular v1.2.0 (8 active rules, per-color fix)",
+    "solver_version": "Modular v1.3.0 (10 active rules, MOVE/COPY added)",
     "total_tests": 1076,
-    "passing": 10,
-    "accuracy": 0.00929368029739777,
-    "arc1_pass": 10,
+    "passing": 12,
+    "accuracy": 0.011152416356877323,
+    "arc1_pass": 12,
     "arc1_total": 407,
     "arc2_pass": 0,
     "arc2_total": 669,
     "rule_counts": {
       "RECOLOR_OBJ_RANK": 1,
       "CROP_BBOX_NONZERO": 1,
+      "MOVE_OBJ_RANK": 2,
       "ROT": 3,
       "FLIP": 2,
       "COLOR_PERM": 3
@@ -1432,21 +1433,21 @@
       "task_id": "25ff71a9",
       "arc_version": "ARC-1",
       "test_idx": 0,
-      "rule": "None",
+      "rule": "MOVE_OBJ_RANK",
       "pred_shape": "3x3",
       "truth_shape": "3x3",
-      "residual": 2,
-      "match": false
+      "residual": 0,
+      "match": true
     },
     {
       "task_id": "25ff71a9",
       "arc_version": "ARC-1",
       "test_idx": 1,
-      "rule": "None",
+      "rule": "MOVE_OBJ_RANK",
       "pred_shape": "3x3",
       "truth_shape": "3x3",
-      "residual": 2,
-      "match": false
+      "residual": 0,
+      "match": true
     },
     {
       "task_id": "2601afb7",
@@ -10777,108 +10778,6 @@
       "truth_shape": "5x5",
       "residual": 601,
       "match": false
-    }
-  ],
-  "passing": [
-    {
-      "task_id": "0d3d703e",
-      "arc_version": "ARC-1",
-      "test_idx": 0,
-      "rule": "RECOLOR_OBJ_RANK",
-      "pred_shape": "3x3",
-      "truth_shape": "3x3",
-      "residual": 0,
-      "match": true
-    },
-    {
-      "task_id": "1cf80156",
-      "arc_version": "ARC-1",
-      "test_idx": 0,
-      "rule": "CROP_BBOX_NONZERO",
-      "pred_shape": "4x6",
-      "truth_shape": "4x6",
-      "residual": 0,
-      "match": true
-    },
-    {
-      "task_id": "3c9b0459",
-      "arc_version": "ARC-1",
-      "test_idx": 0,
-      "rule": "ROT",
-      "pred_shape": "3x3",
-      "truth_shape": "3x3",
-      "residual": 0,
-      "match": true
-    },
-    {
-      "task_id": "6150a2bd",
-      "arc_version": "ARC-1",
-      "test_idx": 0,
-      "rule": "ROT",
-      "pred_shape": "3x3",
-      "truth_shape": "3x3",
-      "residual": 0,
-      "match": true
-    },
-    {
-      "task_id": "67a3c6ac",
-      "arc_version": "ARC-1",
-      "test_idx": 0,
-      "rule": "FLIP",
-      "pred_shape": "3x3",
-      "truth_shape": "3x3",
-      "residual": 0,
-      "match": true
-    },
-    {
-      "task_id": "68b16354",
-      "arc_version": "ARC-1",
-      "test_idx": 0,
-      "rule": "FLIP",
-      "pred_shape": "7x7",
-      "truth_shape": "7x7",
-      "residual": 0,
-      "match": true
-    },
-    {
-      "task_id": "b1948b0a",
-      "arc_version": "ARC-1",
-      "test_idx": 0,
-      "rule": "COLOR_PERM",
-      "pred_shape": "4x4",
-      "truth_shape": "4x4",
-      "residual": 0,
-      "match": true
-    },
-    {
-      "task_id": "c8f0f002",
-      "arc_version": "ARC-1",
-      "test_idx": 0,
-      "rule": "COLOR_PERM",
-      "pred_shape": "3x5",
-      "truth_shape": "3x5",
-      "residual": 0,
-      "match": true
-    },
-    {
-      "task_id": "d511f180",
-      "arc_version": "ARC-1",
-      "test_idx": 0,
-      "rule": "COLOR_PERM",
-      "pred_shape": "4x4",
-      "truth_shape": "4x4",
-      "residual": 0,
-      "match": true
-    },
-    {
-      "task_id": "ed36ccf7",
-      "arc_version": "ARC-1",
-      "test_idx": 0,
-      "rule": "ROT",
-      "pred_shape": "3x3",
-      "truth_shape": "3x3",
-      "residual": 0,
-      "match": true
     }
   ]
 }

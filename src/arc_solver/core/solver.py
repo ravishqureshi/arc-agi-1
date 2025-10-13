@@ -57,6 +57,20 @@ def pce_for_rule(rule: Rule) -> str:
     if rule.name == "KEEP_OBJ_TOPK":
         k = rule.params['k']
         return f"Keep only the top-{k} component{'s' if k > 1 else ''} by size; zero others (verified on train: residual=0)."
+    if rule.name == "MOVE_OBJ_RANK":
+        grp = rule.params['group']
+        r = rule.params['rank']
+        delta = rule.params['delta']
+        target = "largest" if r == 0 else f"rank {r}"
+        scope = "globally" if grp == 'global' else "for each color"
+        return f"MOVE the {target} object {scope} by Δ={delta} (verified on train: residual=0)."
+    if rule.name == "COPY_OBJ_RANK":
+        grp = rule.params['group']
+        r = rule.params['rank']
+        delta = rule.params['delta']
+        target = "largest" if r == 0 else f"rank {r}"
+        scope = "globally" if grp == 'global' else "for each color"
+        return f"COPY the {target} object {scope} by Δ={delta} (verified on train: residual=0)."
     if rule.name == "CROP_BBOX_NONZERO":
         return "Crop to bounding box of non-zero content (edge writes define the present)."
     if rule.name == "KEEP_NONZERO":

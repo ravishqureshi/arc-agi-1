@@ -118,6 +118,108 @@ def test_demo_tasks():
 
     print(f"✓ test_demo_tasks passed ({exact}/{total} exact)")
 
+def test_move_obj_rank():
+    """Test MOVE_OBJ_RANK rule induction."""
+    # MOVE largest by Δ=(+1,+2)
+    x = G([[0,0,0,0,0],
+           [0,1,1,0,0],
+           [0,1,1,0,0],
+           [0,0,0,0,0]])
+    y = G([[0,0,0,0,0],
+           [0,0,0,0,0],
+           [0,0,0,1,1],
+           [0,0,0,1,1]])
+
+    inst = ARCInstance(
+        "move_largest",
+        train=[(x, y)],
+        test_in=[G([[0,2,2,0,0],
+                    [0,2,2,0,0],
+                    [0,0,0,0,0],
+                    [0,0,0,0,0]])],
+        test_out=[G([[0,0,0,0,0],
+                     [0,0,0,2,2],
+                     [0,0,0,2,2],
+                     [0,0,0,0,0]])]
+    )
+
+    res = solve_instance(inst)
+
+    assert res.rule is not None, "Rule should be found"
+    assert res.rule.name == "MOVE_OBJ_RANK", f"Expected MOVE_OBJ_RANK, got {res.rule.name}"
+    assert res.acc_exact == 1.0, f"Expected 100% accuracy, got {res.acc_exact}"
+    assert res.receipts[0].residual == 0, f"Expected residual=0, got {res.receipts[0].residual}"
+
+    print("✓ test_move_obj_rank passed")
+
+def test_copy_obj_rank():
+    """Test COPY_OBJ_RANK rule induction."""
+    # COPY largest by Δ=(0,+3)
+    x = G([[3,3,0,0,0,0],
+           [3,3,0,0,0,0]])
+    y = G([[3,3,0,3,3,0],
+           [3,3,0,3,3,0]])
+
+    inst = ARCInstance(
+        "copy_largest",
+        train=[(x, y)],
+        test_in=[G([[4,4,0,0,0,0],
+                    [4,4,0,0,0,0]])],
+        test_out=[G([[4,4,0,4,4,0],
+                     [4,4,0,4,4,0]])]
+    )
+
+    res = solve_instance(inst)
+
+    assert res.rule is not None, "Rule should be found"
+    assert res.rule.name == "COPY_OBJ_RANK", f"Expected COPY_OBJ_RANK, got {res.rule.name}"
+    assert res.acc_exact == 1.0, f"Expected 100% accuracy, got {res.acc_exact}"
+    assert res.receipts[0].residual == 0, f"Expected residual=0, got {res.receipts[0].residual}"
+
+    print("✓ test_copy_obj_rank passed")
+
+def test_delta_enumeration():
+    """Test Δ enumeration with multiple candidates."""
+    # Create scenario where object moves among other objects
+    # This can't be explained by simpler rules like ROT/FLIP
+
+    # Train pair 1: Move largest object (size 4) right by 2
+    x1 = G([[0,1,1,0,0,0],
+            [0,1,1,0,0,0],
+            [0,0,0,0,5,0]])  # Also has a small object
+    y1 = G([[0,0,0,1,1,0],  # Delta (0,2) - moved right by 2
+            [0,0,0,1,1,0],
+            [0,0,0,0,5,0]])  # Small object stays
+
+    # Train pair 2: Different colors, same delta (0,2)
+    x2 = G([[0,2,2,0,0,0],
+            [0,2,2,0,0,0],
+            [0,0,0,0,7,0]])
+    y2 = G([[0,0,0,2,2,0],  # Delta (0,2) - moved right by 2
+            [0,0,0,2,2,0],
+            [0,0,0,0,7,0]])
+
+    inst = ARCInstance(
+        "delta_enum_test",
+        train=[(x1, y1), (x2, y2)],
+        test_in=[G([[0,3,3,0,0,0],
+                    [0,3,3,0,0,0],
+                    [0,0,0,0,8,0]])],
+        test_out=[G([[0,0,0,3,3,0],
+                     [0,0,0,3,3,0],
+                     [0,0,0,0,8,0]])]
+    )
+
+    res = solve_instance(inst)
+
+    assert res.rule is not None, "Rule should be found with Δ enumeration"
+    assert res.rule.name == "MOVE_OBJ_RANK", f"Expected MOVE_OBJ_RANK, got {res.rule.name}"
+    assert res.rule.params["delta"] == (0, 2), f"Expected delta (0,2), got {res.rule.params['delta']}"
+    assert res.acc_exact == 1.0, f"Expected 100% accuracy, got {res.acc_exact}"
+    assert res.receipts[0].residual == 0, f"Expected residual=0, got {res.receipts[0].residual}"
+
+    print("✓ test_delta_enumeration passed")
+
 def run_all_tests():
     """Run all unit tests."""
     print("Running ARC Solver Unit Tests...")
@@ -127,6 +229,9 @@ def run_all_tests():
     test_symmetry_induction()
     test_crop_bbox()
     test_demo_tasks()
+    test_move_obj_rank()
+    test_copy_obj_rank()
+    test_delta_enumeration()
 
     print("=" * 50)
     print("All tests passed! ✅")

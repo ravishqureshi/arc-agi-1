@@ -8,7 +8,7 @@ from typing import List, Tuple, Optional, Callable
 from .types import Grid
 from .invariants import exact_equals, connected_components, rank_objects
 from ..operators.symmetry import ROT, FLIP
-from ..operators.spatial import CROP, BBOX, CROP_BBOX_NONZERO
+from ..operators.spatial import CROP, BBOX, CROP_BBOX_NONZERO, MOVE_OBJ_RANK, COPY_OBJ_RANK
 from ..operators.masks import KEEP, MASK_NONZERO, MASK_OBJ_RANK
 from ..operators.color import COLOR_PERM, infer_color_mapping, merge_mappings
 import numpy as np
@@ -280,6 +280,142 @@ def induce_keep_obj_topk(train: List[Tuple[Grid, Grid]], k: int = 1, bg: int = 0
 
     return Rule("KEEP_OBJ_TOPK", {"k": k, "bg": bg}, keep_prog)
 
+def shape_mask(objs: List, idx: int, H: int, W: int) -> np.ndarray:
+    """Create boolean mask for object at given index."""
+    m = np.zeros((H, W), dtype=bool)
+    for (r, c) in objs[idx].pixels:
+        m[r, c] = True
+    return m
+
+def shift_mask(m: np.ndarray, dr: int, dc: int) -> np.ndarray:
+    """Shift a boolean mask by (dr, dc), clipping at borders."""
+    H, W = m.shape
+    out = np.zeros_like(m)
+    # shift by copying individual True cells; clip at borders
+    rr, cc = np.where(m)
+    nr = rr + dr
+    nc = cc + dc
+    keep = (nr >= 0) & (nr < H) & (nc >= 0) & (nc < W)
+    out[nr[keep], nc[keep]] = True
+    return out
+
+def induce_move_or_copy_obj_rank(train: List[Tuple[Grid, Grid]],
+                                 group: str = 'global', rank: int = 0, bg: int = 0) -> Optional[Rule]:
+    """
+    Infer a single Δ=(dr,dc) that maps the rank-th object(s) from X to Y
+    on **all** train pairs, either as MOVE (clear=True) or COPY (clear=False).
+
+    Strategy (with Δ enumeration):
+    1. Extract rank-th object mask in X
+    2. Enumerate ALL valid deltas: for each Y object with same color & size,
+       check if shape matches when X's mask is shifted by Δ
+    3. Find common deltas across ALL train pairs (set intersection)
+    4. Try common deltas in priority order (shortest manhattan distance first)
+    5. Test MOVE; if fails, test COPY; accept only if residual=0 for all train pairs
+
+    Args:
+        train: Training pairs
+        group: 'global' ranks all objects by size, 'per_color' ranks within each color
+        rank: Object rank (0 = largest, 1 = second largest, etc.)
+        bg: Background color
+
+    Returns:
+        Rule if pattern matches all train pairs with residual=0, else None
+    """
+    if not train:
+        return None
+
+    # Collect ALL valid deltas per train pair
+    all_deltas_per_pair = []
+
+    for x, y in train:
+        # Check shape consistency - MOVE/COPY requires same shape
+        if x.shape != y.shape:
+            return None
+
+        H, W = x.shape
+        Xobjs = connected_components(x, bg)
+        if not Xobjs:
+            return None
+        ranks_x = rank_objects(Xobjs, group=group)
+        idxs = []
+        if group == 'global':
+            ord_list = ranks_x["global"]
+            if rank >= len(ord_list):
+                return None
+            idxs = [ord_list[rank]]
+        else:  # per_color: we require identical Δ for each color's rank-th object
+            # we'll just use the first color occurrence to infer Δ per pair
+            for _, ord_list in ranks_x.items():
+                if rank < len(ord_list):
+                    idxs = [ord_list[rank]]
+                    break
+            if not idxs:
+                return None
+
+        xi = idxs[0]
+        xmask = shape_mask(Xobjs, xi, H, W)
+        c = Xobjs[xi].color
+        sz = Xobjs[xi].size
+
+        # Find ALL candidates in Y: same color & size
+        Yobjs = connected_components(y, bg)
+        cand = [j for j, o in enumerate(Yobjs) if o.color == c and o.size == sz]
+        if not cand:
+            return None
+
+        # Enumerate ALL valid deltas for this train pair
+        # (instead of taking first match)
+        valid_deltas_this_pair = []
+        for j in cand:
+            dx = int(round(Yobjs[j].centroid[0] - Xobjs[xi].centroid[0]))
+            dy = int(round(Yobjs[j].centroid[1] - Xobjs[xi].centroid[1]))
+            if (dx, dy) == (0, 0):
+                continue  # Skip identity transform
+            # Shape check: shifted xmask should match y's mask
+            ymask = shape_mask(Yobjs, j, H, W)
+            if np.array_equal(shift_mask(xmask, dx, dy), ymask):
+                valid_deltas_this_pair.append((dx, dy))
+
+        if not valid_deltas_this_pair:
+            return None  # No valid deltas for this train pair
+
+        all_deltas_per_pair.append(set(valid_deltas_this_pair))
+
+    # Find common deltas across ALL train pairs (set intersection)
+    common_deltas = set.intersection(*all_deltas_per_pair)
+
+    if not common_deltas:
+        return None  # No delta works for all train pairs
+
+    # Try common deltas in priority order: shortest manhattan distance first
+    # This prioritizes simpler transformations
+    sorted_deltas = sorted(common_deltas, key=lambda d: abs(d[0]) + abs(d[1]))
+
+    for delta in sorted_deltas:
+        # Test MOVE then COPY
+        move_prog = MOVE_OBJ_RANK(rank, delta, group=group, clear=True, bg=bg)
+        if all(exact_equals(move_prog(x), y) for x, y in train):
+            return Rule("MOVE_OBJ_RANK", {
+                "rank": rank,
+                "group": group,
+                "delta": delta,
+                "clear": True,
+                "bg": bg
+            }, move_prog)
+
+        copy_prog = COPY_OBJ_RANK(rank, delta, group=group, bg=bg)
+        if all(exact_equals(copy_prog(x), y) for x, y in train):
+            return Rule("COPY_OBJ_RANK", {
+                "rank": rank,
+                "group": group,
+                "delta": delta,
+                "clear": False,
+                "bg": bg
+            }, copy_prog)
+
+    return None  # No delta worked with MOVE or COPY
+
 # Try rules in order of simplicity (Occam's razor)
 CATALOG = [
     induce_symmetry_rule,
@@ -291,6 +427,9 @@ CATALOG = [
     lambda train: induce_recolor_obj_rank(train, rank=0, group='per_color', bg=0),
     lambda train: induce_keep_obj_topk(train, k=1, bg=0),
     lambda train: induce_keep_obj_topk(train, k=2, bg=0),
+    # Object move/copy rules
+    lambda train: induce_move_or_copy_obj_rank(train, rank=0, group='global', bg=0),
+    lambda train: induce_move_or_copy_obj_rank(train, rank=0, group='per_color', bg=0),
 ]
 
 def induce_rule(train: List[Tuple[Grid, Grid]]) -> Optional[Rule]:

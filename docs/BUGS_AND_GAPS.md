@@ -45,23 +45,95 @@ Build a per-color mapping `{src_color: tgt_color}` instead of single target.
 
 **Impact:** Affects 5-10% of tasks using per-color object transformations.
 
+### [x] COPY Operation Identity Transform Bug
+**Discovered:** 2025-10-13
+**Location:** `src/arc_solver/core/induction.py:302-400` (induce_move_or_copy_obj_rank)
+**Status:** FIXED 2025-10-13
+
+**Problem:**
+When learning COPY operations, the induction routine would find delta=(0,0) first (identity transform) instead of the actual copy delta. This happened because COPY operations have both source and target objects in the output grid, and the algorithm checked the source object first.
+
+**Example:**
+```python
+# Input:  [[3,3,0,0,0,0],
+#          [3,3,0,0,0,0]]
+# Output: [[3,3,0,3,3,0],  # Source at (0,0) AND copy at (0,3)
+#          [3,3,0,3,3,0]]
+# Algorithm found delta=(0,0) from source instead of delta=(0,3) from copy
+```
+
+**Root Cause:**
+```python
+for j in cand:  # Candidates include both source and target objects
+    dx = centroid_diff(Yobjs[j], Xobjs[xi])
+    if match: found = (dx, dy); break  # First match wins, which is (0,0)
+```
+
+**Fix:**
+Skip delta=(0,0) since identity is not a MOVE/COPY operation:
+```python
+if (dx, dy) == (0, 0):
+    continue  # Skip identity transform
+```
+
+**Verification:**
+- Unit test `test_copy_obj_rank()` passes
+- Full test sweep: +2 test outputs (task 25ff71a9)
+
+**Impact:** Critical for COPY pattern recognition. Without fix, 0/2 COPY tasks would pass.
+
+### [x] MOVE/COPY Shape Mismatch Crash
+**Discovered:** 2025-10-13
+**Location:** `src/arc_solver/core/induction.py:283` (shape_mask helper)
+**Status:** FIXED 2025-10-13
+
+**Problem:**
+The induction routine crashed with `IndexError: index 2 is out of bounds for axis 1 with size 2` when train pairs had different shapes (e.g., X is 3×3, Y is 3×2).
+
+**Root Cause:**
+```python
+def shape_mask(objs, idx, H, W):
+    m = np.zeros((H, W), dtype=bool)
+    for (r, c) in objs[idx].pixels:
+        m[r, c] = True  # Crash if object pixels exceed grid bounds
+```
+
+Used X's shape `(H, W)` to create mask but tried to index Y's object pixels that could be outside bounds.
+
+**Fix:**
+Early shape check - MOVE/COPY operations require same input/output shape:
+```python
+for x, y in train:
+    if x.shape != y.shape:
+        return None  # MOVE/COPY not applicable
+```
+
+**Verification:**
+- Full test sweep completes without crashes (1,076/1,076 tasks)
+- Test coverage script runs successfully
+
+**Impact:** Critical - prevented test suite from running. Fixed in first test run.
+
 ---
 
 ## Implementation Gaps
 
 ### [ ] Remaining Legacy Rules (from arc_demo.py)
 
-**Status:** 2/4 legacy rules migrated
+**Status:** 3/5 legacy rules migrated
 
 **Completed:**
 - [x] Color permutation (added 2025-10-13, +3 tasks)
-- [x] Component rank recolor (added 2025-10-13, infrastructure only, +0 tasks)
+- [x] Component rank recolor (added 2025-10-13, +1 task after per-color fix)
+- [x] Move/copy objects (added 2025-10-13, +1 task)
 
 **Remaining:**
 - [ ] Move bbox to origin
 - [ ] Mirror left to right
 
-**Assessment:** Low priority - these are simple patterns covered in IMPLEMENTATION_PLAN.md Phase 1. Expected total impact: +2-3 tasks (1.0-1.2% accuracy).
+**Assessment:** Low priority - these are simple patterns covered in IMPLEMENTATION_PLAN.md Phase 1. Expected total impact: +1-2 tasks (1.2-1.3% accuracy).
+
+**Current Status:** 12/~14 tasks solved (1.1%). Nearly at parity with legacy demo (1.2%).
 
 ---
 
@@ -124,6 +196,41 @@ _None currently identified_
 
 ---
 
+### MOVE/COPY Object Migration Success (2025-10-13)
+
+**Result:** Added MOVE_OBJ_RANK and COPY_OBJ_RANK operators, +1 task solved (25ff71a9, 2 test outputs).
+
+**What worked:**
+1. **Careful migration** - Followed Grok's reference implementation, adapted to modular architecture
+2. **Shape-aware** - Added early shape check (MOVE/COPY requires same input/output shape)
+3. **Identity handling** - Skipped delta=(0,0) to avoid false positives on COPY patterns
+4. **Comprehensive testing** - Unit tests + full sweep caught both bugs immediately
+
+**Bugs found and fixed:**
+1. Identity transform bug (delta=(0,0) matched first in COPY)
+2. Shape mismatch crash (IndexError when X and Y differ in shape)
+
+**Architecture changes:**
+- Added to `spatial.py`: MOVE_OBJ_RANK, COPY_OBJ_RANK, in_bounds helper
+- Added to `induction.py`: induce_move_or_copy_obj_rank, shape_mask, shift_mask helpers
+- Updated `solver.py`: PCE generation for MOVE/COPY rules
+- Added `test_arc_solver.py`: 2 new unit tests
+- Created `scripts/generate_test_coverage.py`: Automated test sweep script
+
+**Impact:**
+- Accuracy: 0.9% → 1.1% (+0.2%)
+- Tasks: 10 → 12 (+2 test outputs from 1 task)
+- Rules: 8 → 10 variations (+2)
+- **Reached parity with legacy demo (12 tasks)**
+
+**Learnings:**
+- Centroid-based matching works well for MOVE/COPY patterns
+- Shape consistency is critical for spatial transformations
+- Identity transform (delta=0) needs explicit handling
+- Full test sweep (1,000 tasks) takes ~90 seconds
+
+---
+
 ## Update Protocol
 
 **When to add entries:**
@@ -163,6 +270,7 @@ _None currently identified_
 ---
 
 **Last Updated:** 2025-10-13
-**Current Coverage:** 9/1076 (0.8%)
-**Critical Bugs:** 0 open, 1 fixed
+**Current Coverage:** 12/1076 (1.1%)
+**Critical Bugs:** 0 open, 3 fixed
 **Open Gaps:** 2 legacy rules, performance optimizations
+**Recent Change:** Added MOVE/COPY operators (+1 task, 2 bugs fixed)
