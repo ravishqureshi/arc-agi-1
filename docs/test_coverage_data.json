@@ -3,9 +3,9 @@
     "generated": "2025-10-13",
     "solver_version": "Modular v1.3.0 (10 active rules, MOVE/COPY added)",
     "total_tests": 1076,
-    "passing": 12,
-    "accuracy": 0.011152416356877323,
-    "arc1_pass": 12,
+    "passing": 13,
+    "accuracy": 0.012081784386617101,
+    "arc1_pass": 13,
     "arc1_total": 407,
     "arc2_pass": 0,
     "arc2_total": 669,
@@ -15,6 +15,7 @@
       "MOVE_OBJ_RANK": 2,
       "ROT": 3,
       "FLIP": 2,
+      "TILE": 1,
       "COLOR_PERM": 3
     }
   },
@@ -2693,10 +2694,10 @@
       "task_id": "445eab21",
       "arc_version": "ARC-1",
       "test_idx": 0,
-      "rule": "None",
-      "pred_shape": "10x10",
+      "rule": "TILE_SUBGRID",
+      "pred_shape": "2x2",
       "truth_shape": "2x2",
-      "residual": 104,
+      "residual": 4,
       "match": false
     },
     {
@@ -6733,11 +6734,11 @@
       "task_id": "a416b8f3",
       "arc_version": "ARC-1",
       "test_idx": 0,
-      "rule": "None",
-      "pred_shape": "5x4",
+      "rule": "TILE",
+      "pred_shape": "5x8",
       "truth_shape": "5x8",
-      "residual": 60,
-      "match": false
+      "residual": 0,
+      "match": true
     },
     {
       "task_id": "a416fc5b",

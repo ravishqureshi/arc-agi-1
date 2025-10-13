@@ -270,6 +270,47 @@ _None currently identified_
 
 ---
 
+### TILE and DRAW_LINE Operators Success (2025-10-13)
+
+**Result:** Added TILE and DRAW_LINE operators with induction routines, +1 task solved (a416b8f3).
+
+**What worked:**
+1. **Empirical discovery** - Used pattern discovery script to identify tiling/drawing patterns in training data
+2. **General operators** - Built TILE, TILE_SUBGRID, DRAW_LINE, DRAW_BOX, FLOOD_FILL operators
+3. **Observer=observed** - Induction routines learn parameters from EACH task's training pairs
+4. **Beam integration** - Added beam-compatible versions for multi-step compositions
+5. **Comprehensive testing** - 3 new unit tests, all passing
+
+**Architecture changes:**
+- Added `operators/tiling.py`: TILE, TILE_SUBGRID (+50 LOC)
+- Added `operators/drawing.py`: DRAW_LINE, DRAW_BOX, FLOOD_FILL (+140 LOC)
+- Added to `induction.py`: induce_tile_rule, induce_draw_line_rule (+120 LOC)
+- Added to `induction.py`: induce_tile, induce_draw_line (beam versions, +100 LOC)
+- Updated `solver.py`: PCE generation for TILE/DRAW_LINE, candidate_rules integration (+15 LOC)
+- Added 3 unit tests to `test_arc_solver.py`
+- Created `scripts/discover_patterns.py`: Pattern discovery from training data (+230 LOC)
+
+**Impact:**
+- Accuracy: 12/1076 → 13/1076 (+0.09%)
+- Tasks: 12 → 13 (+1 task: a416b8f3)
+- Rules: 12 → 14 variations (+2)
+- Pattern coverage: TILE matched, DRAW_LINE ready but no matches yet
+
+**Catalog ordering lesson:**
+- TILE_SUBGRID can match COPY patterns (false positive)
+- Solution: Order CATALOG by specificity - try object operations before tiling/drawing
+- Principle: More constrained operations first (Occam's razor with tie-breaking)
+
+**Learnings:**
+- Tiling patterns exist but are rare (~1% of first 100 tasks)
+- Drawing patterns more common (~15% of first 100 tasks) but detection needs refinement
+- Subgrid extraction search space is large (need bounds on position enumeration)
+- Catalog ordering critical to avoid false positives from general operators
+
+**Next:** Continue with empirical discovery approach - analyze more failing tasks to identify high-impact operators.
+
+---
+
 ## Update Protocol
 
 **When to add entries:**
@@ -309,7 +350,7 @@ _None currently identified_
 ---
 
 **Last Updated:** 2025-10-13
-**Current Coverage:** 12/1076 (1.12%)
+**Current Coverage:** 13/1076 (1.21%)
 **Critical Bugs:** 0 open, 3 fixed
-**Open Gaps:** 2 legacy rules, beam search ready but needs more operators
-**Recent Change:** Added beam search for multi-step compositions (infrastructure ready, 0 new tasks)
+**Open Gaps:** 2 legacy rules, beam search + tiling/drawing operators ready
+**Recent Change:** Added TILE and DRAW_LINE operators (+1 task: a416b8f3)

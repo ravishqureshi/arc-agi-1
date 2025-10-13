@@ -14,7 +14,7 @@ from .induction import (
     # Beam-compatible induction functions
     induce_symmetry, induce_crop_bbox, induce_keep_nonzero,
     induce_color_perm, induce_recolor_obj_rank_beam, induce_keep_topk,
-    induce_move_copy
+    induce_move_copy, induce_tile, induce_draw_line
 )
 
 @dataclass
@@ -81,6 +81,17 @@ def pce_for_rule(rule: Rule) -> str:
         return "Crop to bounding box of non-zero content (edge writes define the present)."
     if rule.name == "KEEP_NONZERO":
         return "Keep only non-zero cells; set background elsewhere."
+    if rule.name == "TILE":
+        nx, ny = rule.params['nx'], rule.params['ny']
+        return f"Tile input {nx}×{ny} times (verified on train: residual=0)."
+    if rule.name == "TILE_SUBGRID":
+        r0, c0, r1, c1 = rule.params['r0'], rule.params['c0'], rule.params['r1'], rule.params['c1']
+        nx, ny = rule.params['nx'], rule.params['ny']
+        return f"Extract subgrid [{r0}:{r1+1},{c0}:{c1+1}] and tile {nx}×{ny} times (verified on train: residual=0)."
+    if rule.name == "DRAW_LINE":
+        r0, c0, r1, c1 = rule.params['r0'], rule.params['c0'], rule.params['r1'], rule.params['c1']
+        color = rule.params['color']
+        return f"Draw line from ({r0},{c0}) to ({r1},{c1}) with color {color} (verified on train: residual=0)."
     return f"{rule.name}: {rule.params}"
 
 def solve_instance(inst: ARCInstance) -> SolveResult:
@@ -178,6 +189,10 @@ def candidate_rules(train: List[Tuple[Grid, Grid]]) -> List[Rule]:
     rules += induce_keep_topk(train, k=2)
     rules += induce_move_copy(train, rank=0, group='global')
     rules += induce_move_copy(train, rank=0, group='per_color')
+
+    # Tiling and drawing operators
+    rules += induce_tile(train)
+    rules += induce_draw_line(train)
 
     return rules
 

@@ -11,6 +11,8 @@ from ..operators.symmetry import ROT, FLIP
 from ..operators.spatial import CROP, BBOX, CROP_BBOX_NONZERO, MOVE_OBJ_RANK, COPY_OBJ_RANK
 from ..operators.masks import KEEP, MASK_NONZERO, MASK_OBJ_RANK
 from ..operators.color import COLOR_PERM, infer_color_mapping, merge_mappings
+from ..operators.tiling import TILE, TILE_SUBGRID
+from ..operators.drawing import DRAW_LINE, DRAW_BOX, FLOOD_FILL
 import numpy as np
 from collections import Counter
 
@@ -417,20 +419,149 @@ def induce_move_or_copy_obj_rank(train: List[Tuple[Grid, Grid]],
 
     return None  # No delta worked with MOVE or COPY
 
+def induce_tile_rule(train: List[Tuple[Grid, Grid]]) -> Optional[Rule]:
+    """
+    Learn tiling parameters from training pairs.
+
+    Strategy:
+    1. Check if output == tile(input, nx, ny) for some nx, ny
+    2. Check if output == tile(subgrid, nx, ny) for some subgrid
+    3. Find params that work for ALL train pairs (observer=observed)
+
+    Returns:
+        Rule if pattern matches, else None
+    """
+    if not train:
+        return None
+
+    # Try simple tiling (tile entire input)
+    for nx in range(1, 6):
+        for ny in range(1, 6):
+            if nx == 1 and ny == 1:
+                continue  # Identity
+
+            prog = TILE(nx, ny)
+            if all(exact_equals(prog(x), y) for x, y in train):
+                return Rule("TILE", {"nx": nx, "ny": ny}, prog,
+                           f"Tile input {nx}×{ny} times")
+
+    # Try tiling subgrid (extract pattern from input and tile it)
+    # Only check first train pair for pattern extraction
+    if train:
+        x0, y0 = train[0]
+        h_out, w_out = y0.shape
+
+        # Try different subgrid sizes
+        for h_pat in range(1, min(x0.shape[0] + 1, 10)):
+            for w_pat in range(1, min(x0.shape[1] + 1, 10)):
+                if h_out % h_pat == 0 and w_out % w_pat == 0:
+                    nx = h_out // h_pat
+                    ny = w_out // w_pat
+
+                    if nx == 1 and ny == 1:
+                        continue
+
+                    # Try extracting pattern from different positions
+                    for r0 in range(max(1, x0.shape[0] - h_pat + 1)):
+                        for c0 in range(max(1, x0.shape[1] - w_pat + 1)):
+                            r1 = r0 + h_pat - 1
+                            c1 = c0 + w_pat - 1
+
+                            prog = TILE_SUBGRID(r0, c0, r1, c1, nx, ny)
+
+                            # Check if works for all train pairs
+                            try:
+                                if all(exact_equals(prog(x), y) for x, y in train):
+                                    return Rule("TILE_SUBGRID",
+                                              {"r0": r0, "c0": c0, "r1": r1, "c1": c1, "nx": nx, "ny": ny},
+                                              prog,
+                                              f"Tile subgrid [{r0}:{r1+1}, {c0}:{c1+1}] {nx}×{ny} times")
+                            except:
+                                continue
+
+    return None
+
+def induce_draw_line_rule(train: List[Tuple[Grid, Grid]], bg: int = 0) -> Optional[Rule]:
+    """
+    Learn line drawing parameters from training pairs.
+
+    Strategy:
+    1. Find cells that changed from input to output
+    2. Check if they form a line
+    3. Learn line endpoints and color
+    4. Verify across ALL train pairs
+
+    Returns:
+        Rule if pattern matches, else None
+    """
+    if not train:
+        return None
+
+    # Must have same shape
+    for x, y in train:
+        if x.shape != y.shape:
+            return None
+
+    # Detect line parameters from first train pair
+    x0, y0 = train[0]
+    diff = (x0 != y0)
+
+    if not np.any(diff):
+        return None
+
+    changed_pixels = np.argwhere(diff)
+    if len(changed_pixels) < 2:  # Need at least 2 pixels for a line
+        return None
+
+    # Get line color (most common color in changed pixels)
+    colors = [int(y0[r, c]) for r, c in changed_pixels]
+    line_color = int(Counter(colors).most_common(1)[0][0])
+
+    # Try to find line endpoints
+    # Simple heuristic: use extremes of changed pixels
+    rows = changed_pixels[:, 0]
+    cols = changed_pixels[:, 1]
+
+    r0, r1 = int(rows.min()), int(rows.max())
+    c0, c1 = int(cols.min()), int(cols.max())
+
+    # Check if this is a horizontal or vertical line
+    is_horizontal = len(np.unique(rows)) == 1
+    is_vertical = len(np.unique(cols)) == 1
+
+    if not (is_horizontal or is_vertical):
+        # Diagonal or complex line - skip for now
+        return None
+
+    prog = DRAW_LINE(r0, c0, r1, c1, line_color)
+
+    # Verify on all train pairs
+    if all(exact_equals(prog(x), y) for x, y in train):
+        return Rule("DRAW_LINE",
+                   {"r0": r0, "c0": c0, "r1": r1, "c1": c1, "color": line_color},
+                   prog,
+                   f"Draw line from ({r0},{c0}) to ({r1},{c1}) with color {line_color}")
+
+    return None
+
 # Try rules in order of simplicity (Occam's razor)
+# Principle: Try more specific/constrained operations before general ones
 CATALOG = [
     induce_symmetry_rule,
     induce_color_perm_rule,
     induce_crop_nonzero_rule,
     induce_keep_nonzero_rule,
-    # Object rank rules (try common patterns)
+    # Object rank rules (try common patterns) - More specific than tiling
     lambda train: induce_recolor_obj_rank(train, rank=0, group='global', bg=0),
     lambda train: induce_recolor_obj_rank(train, rank=0, group='per_color', bg=0),
     lambda train: induce_keep_obj_topk(train, k=1, bg=0),
     lambda train: induce_keep_obj_topk(train, k=2, bg=0),
-    # Object move/copy rules
+    # Object move/copy rules - More specific than tiling
     lambda train: induce_move_or_copy_obj_rank(train, rank=0, group='global', bg=0),
     lambda train: induce_move_or_copy_obj_rank(train, rank=0, group='per_color', bg=0),
+    # Tiling and drawing operators - More general, try after object operations
+    induce_tile_rule,
+    induce_draw_line_rule,
 ]
 
 def induce_rule(train: List[Tuple[Grid, Grid]]) -> Optional[Rule]:
@@ -685,3 +816,107 @@ def induce_move_copy(train: List[Tuple[Grid, Grid]], rank: int = 0, group: str =
                           copy_prog, f"Copy {target} {group} by Δ={delta}"))
 
     return out
+
+def induce_tile(train: List[Tuple[Grid, Grid]]) -> List[Rule]:
+    """Learn tiling parameters. Beam-compatible version."""
+    if not train:
+        return []
+
+    rules = []
+
+    # Try simple tiling (tile entire input)
+    for nx in range(1, 6):
+        for ny in range(1, 6):
+            if nx == 1 and ny == 1:
+                continue  # Identity
+
+            prog = TILE(nx, ny)
+            if all(exact_equals(prog(x), y) for x, y in train):
+                rules.append(Rule("TILE", {"nx": nx, "ny": ny}, prog,
+                                f"Tile input {nx}×{ny} times"))
+
+    # Try tiling subgrid (extract pattern from input and tile it)
+    if train:
+        x0, y0 = train[0]
+        h_out, w_out = y0.shape
+
+        # Try different subgrid sizes (limit search to avoid explosion)
+        for h_pat in range(1, min(x0.shape[0] + 1, 6)):
+            for w_pat in range(1, min(x0.shape[1] + 1, 6)):
+                if h_out % h_pat == 0 and w_out % w_pat == 0:
+                    nx = h_out // h_pat
+                    ny = w_out // w_pat
+
+                    if nx == 1 and ny == 1:
+                        continue
+
+                    # Try extracting pattern from different positions (limit search)
+                    for r0 in range(min(3, max(1, x0.shape[0] - h_pat + 1))):
+                        for c0 in range(min(3, max(1, x0.shape[1] - w_pat + 1))):
+                            r1 = r0 + h_pat - 1
+                            c1 = c0 + w_pat - 1
+
+                            prog = TILE_SUBGRID(r0, c0, r1, c1, nx, ny)
+
+                            # Check if works for all train pairs
+                            try:
+                                if all(exact_equals(prog(x), y) for x, y in train):
+                                    rules.append(Rule("TILE_SUBGRID",
+                                                    {"r0": r0, "c0": c0, "r1": r1, "c1": c1, "nx": nx, "ny": ny},
+                                                    prog,
+                                                    f"Tile subgrid [{r0}:{r1+1}, {c0}:{c1+1}] {nx}×{ny} times"))
+                            except:
+                                continue
+
+    return rules
+
+def induce_draw_line(train: List[Tuple[Grid, Grid]], bg: int = 0) -> List[Rule]:
+    """Learn line drawing parameters. Beam-compatible version."""
+    if not train:
+        return []
+
+    # Must have same shape
+    for x, y in train:
+        if x.shape != y.shape:
+            return []
+
+    # Detect line parameters from first train pair
+    x0, y0 = train[0]
+    diff = (x0 != y0)
+
+    if not np.any(diff):
+        return []
+
+    changed_pixels = np.argwhere(diff)
+    if len(changed_pixels) < 2:  # Need at least 2 pixels for a line
+        return []
+
+    # Get line color (most common color in changed pixels)
+    colors = [int(y0[r, c]) for r, c in changed_pixels]
+    line_color = int(Counter(colors).most_common(1)[0][0])
+
+    # Try to find line endpoints
+    rows = changed_pixels[:, 0]
+    cols = changed_pixels[:, 1]
+
+    r0, r1 = int(rows.min()), int(rows.max())
+    c0, c1 = int(cols.min()), int(cols.max())
+
+    # Check if this is a horizontal or vertical line
+    is_horizontal = len(np.unique(rows)) == 1
+    is_vertical = len(np.unique(cols)) == 1
+
+    if not (is_horizontal or is_vertical):
+        # Diagonal or complex line - skip for now
+        return []
+
+    prog = DRAW_LINE(r0, c0, r1, c1, line_color)
+
+    # Verify on all train pairs
+    if all(exact_equals(prog(x), y) for x, y in train):
+        return [Rule("DRAW_LINE",
+                   {"r0": r0, "c0": c0, "r1": r1, "c1": c1, "color": line_color},
+                   prog,
+                   f"Draw line from ({r0},{c0}) to ({r1},{c1}) with color {line_color}")]
+
+    return []

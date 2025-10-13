@@ -24,14 +24,16 @@ arc-agi-1/
 │   ├── CONTEXT_INDEX.md            # 📍 Navigation map for all docs/code
 │   ├── BUGS_AND_GAPS.md            # ⚠️ Known bugs, gaps, and design decisions
 │   ├── IMPLEMENTATION_PLAN.md      # Master plan for 79.6%+ accuracy
-│   ├── TEST_COVERAGE.md            # Test coverage report (10/1076 = 0.9%)
+│   ├── TEST_COVERAGE.md            # Test coverage report (13/1076 = 1.21%)
+│   ├── test_coverage_data.json     # Raw test results (1,076 test outputs)
 │   ├── SUBMISSION_REQUIREMENTS.md  # Source of truth for submission format
 │   ├── CODE_STRUCTURE.md           # How to organize code (%%writefile pattern)
 │   ├── arc-agi-kaggle-docs.md      # Competition documentation
-│   ├── architecture.md             # Modular code architecture (16 files)
+│   ├── architecture.md             # Modular code architecture (23 files)
 │   └── core/                       # Universe Intelligence framework docs
 │       ├── universe-intelligence-unified.md # Complete guide (all 3 enrichments)
-│       └── ui_arc_demo.md          # ARC demo explanation
+│       ├── ui_arc_demo.md          # ARC demo explanation
+│       └── *.md                    # Other UI docs and code reviews
 │
 ├── notebooks/                     # Development notebooks
 │   └── submission.ipynb           # Final submission notebook (future)
@@ -45,21 +47,25 @@ arc-agi-1/
 │   │   │   ├── types.py           # Grid, Mask, ObjList types
 │   │   │   ├── invariants.py      # Invariant engine (histogram, components, symmetries)
 │   │   │   ├── receipts.py        # Edit bills, residual, PCE
-│   │   │   ├── induction.py       # Rule induction from train pairs
-│   │   │   └── solver.py          # Main solver harness
+│   │   │   ├── induction.py       # Rule induction + beam search compatibility
+│   │   │   └── solver.py          # Main solver harness + beam search
 │   │   ├── operators/             # DSL operators by family
 │   │   │   ├── symmetry.py        # ROT, FLIP
-│   │   │   ├── spatial.py         # CROP, BBOX
-│   │   │   ├── masks.py           # MASK_COLOR, MASK_NONZERO, KEEP, REMOVE
+│   │   │   ├── spatial.py         # CROP, BBOX, MOVE_OBJ_RANK, COPY_OBJ_RANK
+│   │   │   ├── masks.py           # MASK_COLOR, MASK_NONZERO, MASK_OBJ_RANK, KEEP, REMOVE
+│   │   │   ├── color.py           # COLOR_PERM, color mapping inference
+│   │   │   ├── tiling.py          # TILE, TILE_SUBGRID
+│   │   │   ├── drawing.py         # DRAW_LINE, DRAW_BOX, FLOOD_FILL
 │   │   │   └── composition.py     # ON, SEQ
 │   │   └── legacy/                # Previous implementations (reference only)
 │   │       └── arc_demo.py        # 6-rule demo (12/1000 solved)
 │   ├── tests/                     # Unit tests
-│   │   └── test_arc_solver.py     # Modular tests (ALL PASSING ✅)
+│   │   └── test_arc_solver.py     # Modular tests (13 tests, ALL PASSING ✅)
 │   └── demos/                     # Demo scripts
 │
 ├── scripts/                       # Helper scripts
-│   └── build_notebook.py          # Auto-generate notebook from src/ (future)
+│   ├── generate_test_coverage.py  # Test coverage generator (1,076 tasks)
+│   └── discover_patterns.py       # Empirical pattern discovery from training data
 │
 ├── arc_version_split.py           # Utility: Distinguish ARC-1 vs ARC-2 tasks
 ├── example_version_tracking.py    # Example: Track ARC-1 vs ARC-2 scores separately
@@ -319,11 +325,21 @@ python src/arc_solver/arc_solver_v1.py
 python -c "import json; d=json.load(open('data/arc-agi_training_challenges.json')); print(f'{len(d)} training tasks')"
 ```
 
+## Current Status
+
+- **Framework:** ✅ Universe Intelligence with 3 enrichments (ORDER/ENTROPY/QUADRATIC)
+- **Architecture:** ✅ Modular solver (23 files, 8 operator families)
+- **Beam Search:** ✅ Multi-step composition infrastructure
+- **Coverage:** 13/1076 tasks (1.21%) = 13/407 ARC-1 (3.19%), 0/669 ARC-2 (0%)
+- **Active Rules:** 14 induction routines in CATALOG
+- **Tests:** 13/13 unit tests passing ✅
+
 ## Next Steps
 
 1. ✅ Framework ready (`universe_intelligence.py` with all three enrichments)
 2. ✅ Demo solver working (`arc_demo.py` - 3/3 accuracy on test tasks)
-3. 🔄 Expand rule catalog (add more transformation patterns)
-4. 🔄 Build production solver for full ARC benchmark
-5. 🔄 Create Kaggle submission notebook
-6. 🔄 Submit and iterate (1 submission per day limit)
+3. ✅ Modular architecture (23 files, beam search, 14 rules)
+4. 🔄 Expand operator catalog (Phase 1: 60-80 operators for 10-15% accuracy)
+5. 🔄 Empirical discovery from failing tasks (analyze patterns, build operators)
+6. 🔄 Create Kaggle submission notebook
+7. 🔄 Submit and iterate (1 submission per day limit)

@@ -291,6 +291,98 @@ def test_beam_single_step_fallback():
 
     print("✓ test_beam_single_step_fallback passed")
 
+def test_tile_simple():
+    """Test TILE rule induction."""
+    # Tile 2x3
+    x = G([[1,2],
+           [3,4]])
+    y = G([[1,2,1,2,1,2],
+           [3,4,3,4,3,4],
+           [1,2,1,2,1,2],
+           [3,4,3,4,3,4]])
+
+    inst = ARCInstance(
+        "tile_2x3",
+        train=[(x, y)],
+        test_in=[G([[5,6],
+                    [7,8]])],
+        test_out=[G([[5,6,5,6,5,6],
+                     [7,8,7,8,7,8],
+                     [5,6,5,6,5,6],
+                     [7,8,7,8,7,8]])]
+    )
+
+    res = solve_instance(inst)
+
+    assert res.rule is not None, "TILE rule should be found"
+    assert res.rule.name == "TILE", f"Expected TILE, got {res.rule.name}"
+    assert res.rule.params["nx"] == 2, f"Expected nx=2, got {res.rule.params['nx']}"
+    assert res.rule.params["ny"] == 3, f"Expected ny=3, got {res.rule.params['ny']}"
+    assert res.acc_exact == 1.0, f"Expected 100% accuracy, got {res.acc_exact}"
+    assert res.receipts[0].residual == 0, f"Expected residual=0, got {res.receipts[0].residual}"
+
+    print("✓ test_tile_simple passed")
+
+def test_draw_line_horizontal():
+    """Test DRAW_LINE rule induction (horizontal line)."""
+    # Draw horizontal line at row 1
+    x = G([[0,0,0,0],
+           [0,0,0,0],
+           [0,0,0,0]])
+    y = G([[0,0,0,0],
+           [7,7,7,7],
+           [0,0,0,0]])
+
+    inst = ARCInstance(
+        "draw_line_h",
+        train=[(x, y)],
+        test_in=[G([[0,0,0,0],
+                    [0,0,0,0],
+                    [0,0,0,0]])],
+        test_out=[G([[0,0,0,0],
+                     [7,7,7,7],
+                     [0,0,0,0]])]
+    )
+
+    res = solve_instance(inst)
+
+    assert res.rule is not None, "DRAW_LINE rule should be found"
+    assert res.rule.name == "DRAW_LINE", f"Expected DRAW_LINE, got {res.rule.name}"
+    assert res.acc_exact == 1.0, f"Expected 100% accuracy, got {res.acc_exact}"
+    assert res.receipts[0].residual == 0, f"Expected residual=0, got {res.receipts[0].residual}"
+
+    print("✓ test_draw_line_horizontal passed")
+
+def test_draw_line_vertical():
+    """Test DRAW_LINE rule induction (vertical line)."""
+    # Draw vertical line at col 2
+    x = G([[0,0,0,0],
+           [0,0,0,0],
+           [0,0,0,0]])
+    y = G([[0,0,5,0],
+           [0,0,5,0],
+           [0,0,5,0]])
+
+    inst = ARCInstance(
+        "draw_line_v",
+        train=[(x, y)],
+        test_in=[G([[0,0,0,0],
+                    [0,0,0,0],
+                    [0,0,0,0]])],
+        test_out=[G([[0,0,5,0],
+                     [0,0,5,0],
+                     [0,0,5,0]])]
+    )
+
+    res = solve_instance(inst)
+
+    assert res.rule is not None, "DRAW_LINE rule should be found"
+    assert res.rule.name == "DRAW_LINE", f"Expected DRAW_LINE, got {res.rule.name}"
+    assert res.acc_exact == 1.0, f"Expected 100% accuracy, got {res.acc_exact}"
+    assert res.receipts[0].residual == 0, f"Expected residual=0, got {res.receipts[0].residual}"
+
+    print("✓ test_draw_line_vertical passed")
+
 def run_all_tests():
     """Run all unit tests."""
     print("Running ARC Solver Unit Tests...")
@@ -303,6 +395,11 @@ def run_all_tests():
     test_move_obj_rank()
     test_copy_obj_rank()
     test_delta_enumeration()
+
+    print("\nRunning Tiling & Drawing Tests...")
+    test_tile_simple()
+    test_draw_line_horizontal()
+    test_draw_line_vertical()
 
     print("\nRunning Beam Search Tests...")
     test_beam_rot_then_crop()
