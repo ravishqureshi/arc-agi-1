@@ -8,23 +8,42 @@ All logic is in modular files for easy extension.
 
 import json
 from pathlib import Path
+from datetime import datetime
 
 # Import from arc_solver package
 from arc_solver import (
     ARCInstance, G,
-    beam_search, solve_with_beam
+    solve_with_beam,
+    task_sha, program_sha, log_receipt
 )
 
-if __name__ == "__main__":
+
+def run_solver(dataset_dir=None, out_dir=None):
+    """
+    Run solver on ARC dataset and write receipts to out_dir.
+
+    Args:
+        dataset_dir: Path to dataset directory (default: data/)
+        out_dir: Output directory for receipts (default: runs/YYYY-MM-DD)
+    """
+    if dataset_dir is None:
+        dataset_dir = Path(__file__).parent.parent / 'data'
+    else:
+        dataset_dir = Path(dataset_dir)
+
+    if out_dir is None:
+        date_str = datetime.now().strftime("%Y-%m-%d")
+        out_dir = f"runs/{date_str}"
+
     print("=" * 70)
     print("UI CLEAN - From clarification doc (8 inducers)")
+    print(f"Output: {out_dir}")
     print("=" * 70)
 
     # Load data
-    data_dir = Path(__file__).parent.parent / 'data'
-    with open(data_dir / 'arc-agi_training_challenges.json') as f:
+    with open(dataset_dir / 'arc-agi_training_challenges.json') as f:
         challenges = json.load(f)
-    with open(data_dir / 'arc-agi_training_solutions.json') as f:
+    with open(dataset_dir / 'arc-agi_training_solutions.json') as f:
         solutions = json.load(f)
 
     # Test on ALL 1000 tasks
@@ -41,12 +60,38 @@ if __name__ == "__main__":
         if idx % 100 == 0:
             print(f"Progress: {idx}/{total} ({100*idx/total:.1f}%), Solved: {solved}")
 
-        steps, preds, residuals = solve_with_beam(inst, max_depth=6, beam_size=160)
+        steps, preds, test_residuals, metadata = solve_with_beam(inst, max_depth=6, beam_size=160)
 
-        if steps and all(r == 0 for r in residuals):
+        # Build receipt record
+        status = "solved" if (steps and all(r == 0 for r in test_residuals)) else "failed"
+        program = [op.name for op in steps] if steps else []
+
+        receipt = {
+            "task": task_id,
+            "status": status,
+            "program": program,
+            "total_residual": metadata["total_residual"],
+            "residuals_per_pair": metadata["residuals_per_pair"],
+            "palette_invariants": metadata["palette_invariants"],
+            "component_invariants": metadata["component_invariants"],
+            "beam": metadata["beam"],
+            "timing_ms": metadata["timing_ms"],
+            "hashes": {
+                "task_sha": task_sha(train),
+                "program_sha": program_sha(steps) if steps else ""
+            }
+        }
+
+        log_receipt(receipt, out_dir=out_dir)
+
+        if status == "solved":
             solved += 1
-            print(f"✓ {task_id}: {' → '.join(op.name for op in steps)}")
+            print(f"✓ {task_id}: {' → '.join(program)}")
 
     print(f"\n{'='*70}")
     print(f"FINAL: Solved {solved}/{total} = {100*solved/total:.2f}%")
     print(f"{'='*70}")
+
+
+if __name__ == "__main__":
+    run_solver()

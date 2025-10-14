@@ -7,7 +7,10 @@ Modular implementation of inducer-based operator discovery for ARC-AGI.
 from .types import Grid, Operator, ARCInstance, Node
 from .utils import (
     G, equal, residual, inb,
-    bbox_nonzero, components, rank_by_size
+    bbox_nonzero, components, rank_by_size,
+    task_sha, program_sha,
+    compute_palette_delta, compute_component_delta,
+    log_receipt
 )
 from .operators import (
     ROT, FLIP, COLOR_PERM,
@@ -39,6 +42,9 @@ __all__ = [
     # Utils
     'G', 'equal', 'residual', 'inb',
     'bbox_nonzero', 'components', 'rank_by_size',
+    'task_sha', 'program_sha',
+    'compute_palette_delta', 'compute_component_delta',
+    'log_receipt',
 
     # Operators
     'ROT', 'FLIP', 'COLOR_PERM',
