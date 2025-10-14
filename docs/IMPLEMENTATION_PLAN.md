@@ -1,570 +1,613 @@
-Below is a complete, receipts-first plan to push an ARC-style solver past the current record using the full universe-functioning approach. It’s concrete enough to build from immediately, and every part is tied to truth (least fixed point), edges write (adjunction), enrichment so we keep proofs (“receipts”) at every step.
+# ARC‑AGI Coverage Plan — Universe‑Intelligence (A → B → D)
 
-0) Ground rules (ARC constraints + receipts)
+## Goal & non‑negotiables
 
-Per-task learning only: induce programs solely from the train pairs of that task (no external corpus).
-Receipts for every accepted solution:
-Residual = 0 on all train pairs (exact grid match).
-Edit bill (# cells changed) + boundary share (edge vs interior edits).
-PCE (Proof-Carrying English): short explanation with clause→invariant mapping.
-Stop at first program whose train residual = 0 and Occam (shortest/lowest bill) wins when multiple fit.
-Universe card we never leave:
-Inside settles → verification = least fixed point (no further edit possible).
-Edges write → bills & time live in edit counts and boundary shares.
-Observer = observed → cross-pair agreement (same parameterized rule must fit all train pairs) or return exact edit bills (where inconsistency lives).
+* **Goal:** increase solved tasks rapidly on ARC public (and v2 where applicable).
+* **Non‑negotiables:**
 
-1) System architecture (end-to-end)
-A. Invariant engine (precompute once per pair)
-Size, color histogram, connected components (with area/centroid/orientation), bounding boxes, symmetry groups (rot/flip), periodicity, adjacency graphs, lattice/gridding, object descriptors (shape signature), masks (color/size/orientation filters), line/segment detectors, repetition counts.
-B. Typed DSL (operators + types)
+  1. **Determinism** (same inputs → same outputs).
+  2. **Receipts** per task (proof artifacts): *train residual == 0* checks, palette/shape deltas, op sequence, and hashes.
+  3. **Verifying inducers:** every operator we add must include an inducer that **unifies parameters across *all* train pairs** and **proves residual==0** before the operator is admitted into search.
 
-Types: Grid, Mask, ObjList, Color, Vec2, Int.
-
-Constructors: components(Grid)→ObjList, bbox(Grid/Mask)→Rect, mask_color(Grid,Color)→Mask, mask_rank(ObjList,by=size/color/centroid_rank)→Mask.
-
-Grid→Grid ops: ROT/FLIP/SHIFT, CROP(rect), PASTE(sub, at), MIRROR(axis), TILE, DRAW(line/box/diag), FLOOD/ERODE/DILATE, RECOLOR(mapping), KEEP(mask) / REMOVE(mask).
-Obj ops: MAP(ObjList, op_per_obj), SORT(ObjList, key), FILTER(ObjList, predicate).
-
-Combinators (gluing): ON(mask, prog) (apply prog only on mask), MERGE(prog1, prog2) (disjoint masks), with receipts ensuring masks are disjoint or resolved by priority (edit bills logged).
-C. Program composer (search kernel)
-Induction: infer operator families + parameter candidates directly from each train pair (e.g., ROT=k that aligns input→output, RECOLOR map, MIRROR, CROP, KEEP(mask_rank=largest)).
-Unification: intersect parameter sets across train pairs → single parameterization that fits all pairs; else compute edit-bills to show contradictions (observer=observed).
-Composition: build short programs (depth ≤ 6–8) by typed chaining; at each partial step verify residual decreases or stays 0 on train; prune aggressively on any pair with residual > 0.
-D. Search strategy (fast + safe)
-
-Curriculum: try atomic rules first; then 2-step compositions; then up to depth K with beam search.
-Heuristics: rank candidates by (1) residual drop on hardest pair, (2) total edit bill drop (Occam), (3) simplicity of masks (fewest faces), (4) symmetry consistency.
-Portfolio: in parallel, run enumerative BFS, grammar-guided synthesis, and parameter-only portfolios (e.g., symmetry-first, recolor-first, crop-first).
-Early exit: stop when a program achieves residual=0 on all train pairs.
-
-E. Verification & receipts
-Mandatory receipts per solved task:
-Train residuals = 0 (each pair).
-Bill and boundary share per train & test.
-PCE explanation per step (e.g., “Mirror left half to right; recolor largest component to color 9; crop bbox…”), each clause linked to the exact invariant check that forced it.
-F. Test-time prediction
-Apply the verified program to test grid(s). If multiple programs fit train, choose the shortest (and lowest bill); if tie, choose the one with highest symmetry agreement or lowest mask complexity.
-2) Operator families to cover the remaining 20–30% (record-breaking set)
-
-Symmetries / Affine
-ROT/FLIP, SHIFT (wrap/no wrap), REFLECT/GLIDE, ALIGN centers/axes, SHEAR (rare but some ARC variants imply skew).
-Masks / Partitioning
-By color (single / set), size (largest, second largest), position (leftmost/topmost corners), orientation (principal axis), shape signature (perimeter/area, concavity flags), grid cell (lattice quantization).
-Repetition / Tiling
-
-Detect translation vectors and repeat tiny motifs to fill constrained areas; enforce boundaries via KEEP/REMOVE masks.
-Object arithmetic
-
-Count & replicate objects to match a target count (given by train pair deltas); “construct the missing one” rules (copy adjacent, reflect neighbor, build diagonal patterns).
-
-Draw & edit
-
-Lines (axis-aligned/diagonal), boxes (hollow/filled), crosses, checkerboard fill; draw from inferred coordinates (centroid/bbox edges).
-Color logic
-
-Global color permutation; conditional recolor: by rank (largest/lighter), by adjacency (touching color X → recolor to Y), by parity (checker fill parity), by orientation.
-Composition
-
-Apply different sub-programs on disjoint masks (colors, halves, quadrants), then glue results (receipts: masks non-overlapping or deterministic priority with edit bills logged).
-Robustification (enrichment)
-
-Where exact equality is brittle early in search, use 1-step “TV” or “entropy” enrichment only to rank candidates (not to accept), then switch back to exact equality for final verification.
-3) Search and pruning logic (Kan-gluing + receipts)
-
-Induce masks & transforms per pair; unify across all pairs (observer=observed): if parameter sets conflict, report edit bills (which pixels disagree and by how much) to prune that branch.
-Partial composition must not increase residual on any train pair; otherwise prune (inside must settle).
-
-Gluing of sub-programs uses mask disjointness; when masks overlap, either normalize by declared priority or convert to non-overlap by calculating edit bills (logged).
-Stop at first program with train residual=0; favor shortest + lowest bill.
-
-4) Scaling up to the full benchmark
-A. Rule catalog growth (2–3 weeks, aggressive)
-
-Add ~60–80 operators (many parameterized) to reach coverage of typical ARC patterns.
-For each, implement induce→verify routines + receipts.
-
-B. Search infra
-
-Beam search size ~ 100–500 nodes; depth ≤ 6–8; typed operator signatures prune 90%+ branches.
-Portfolio parallelism on CPU cores per task; time budget per task 10–60s (tunable).
-C. Confidence & tie-breakers (Occam + stability)
-Prefer minimal program length; if tie, minimal edit bill; if tie, stability under small input perturbations (e.g., swapping equal components) — choose program that keeps invariants consistent.
-D. Continuous evaluation
-
-Maintain public dev split of ARC (or ARC-AGI1 public subset) for iteration.
-
-Track category coverage (symmetry, counting, tiling, lines, recolor, crop, object arithmetic, lattice, multi-region).
-
-Use holdout for true model health; do not tune to test.
-5) Receipts and PCE (what convinces reviewers instantly)
-For each solved task, print:
-Rule program (sequence of named operators + parameters).
-Train pair residuals = 0 (per grid).
-Edit bill (# edits) + boundary share (edge vs interior).
-PCE line (1–2 sentences) with clause→check mapping:
-“Most change on largest component (rank=1).”
-“Mirror left half onto right.”
-“Recolor (map {1→7, 2→8}).”
-“Crop bbox of non-zero.”
-For multi-mask programs: show masks as small ASCII grids to make the glue obvious.
-
-This makes each solution auditable and trustworthy—no black-box guessing.
-6) Milestones (8–10 weeks to surpass the record)
-Week 1–2:
-
-Implement invariant engine & typed DSL skeleton.
-Port existing 10-task demo; add ~20 new operators (masking, drawing, repetition, line detection).
-
-Build induction/verification routines; unit tests.
-Week 3–4:
-Composition search + beam portfolio; strong pruning; PCE renderer.
-Solve 100–150 curated ARC tasks; measure category coverage; refine heuristics.
-
-Week 5–6:
-
-Expand catalog to ~60–80 ops; add object arithmetic & lattice detection; “construct missing” rules.
-Parallel harness; per-task budget; Occam tie-breakers; stability checks.
-Week 7–8:
-Run full ARC-AGI1 development set; iterate on failing categories with targeted ops.
-Target ≥ 80% on public or reproducible split with receipts for each solved item.
-Week 9–10:
-Final hardening; run on official eval (or shadow eval); publish receipts + PCE per task; ablation studies.
-7) Why this can beat 79.6% (and stay honest)
-The bottleneck in ARC is not “missing a trillion parameters”; it is finding the right, short program that fits all train pairs exactly. Our method induces operator parameters from each pair then unifies across pairs (observer=observed) — a massive reduction of the search space.
-Receipts prune dead ends early (if any pair disagrees → branch dies).
-Gluing (Kan/inf-conv) lets us solve multi-region tasks by design, not luck.
-
-PCE and bills make each solution transparent; reviewers can verify steps visually or by code.
-
-8) Risks & mitigations
-
-Combinatorial blow-up: controlled by typed signatures + early prune + beam portfolios.
-
-Operator gaps: close by systematically adding families: lattice, object arithmetic, edge drawing, repetition patterns.
-Ambiguous train fit (many programs fit): resolve via Occam + stability; keep multi-solution tie-breaker logs.
-9) Deliverables
-Solver repo with: invariant engine, DSL, induction/verification, search, PCE, receipts printer.
-
-Operator catalog (≥ 60 ops) with docs & unit tests.
-Benchmark report: per-category coverage, accuracy, examples, ablations.
-Receipts pack (for organizers): every solved item’s program + train residuals + bills + PCE.
-
-The one sentence that carries the whole plan
-Learn the invariants from each train pair, prove them across pairs (observer=observed), compose only what keeps residual=0 (inside settles), and glue sub-solutions with edit bills; stop at the shortest program.
-That's how we surpass the record—with receipts that anyone can check.
+**Repository context:** Work inside `ui_clean.py` (and `scripts/` as needed). If names differ in our codebase, adapt the function names accordingly.
 
 ---
 
-## APPENDIX: Coverage Analysis & Gap-Filling Strategy
-
-### Expected Coverage With Plan As-Is
-
-**Estimated performance if we implement sections 0-9 exactly as written:**
-
-| Dataset | Expected Accuracy | Confidence | Notes |
-|---------|------------------|------------|-------|
-| **ARC-AGI-1** | **60-75%** | High | Plan covers most core patterns; missing some edge cases |
-| **ARC-AGI-2** | **40-55%** | Medium | Symbol learning gap is critical; harder compositional tasks |
-| **Record (79.6%)** | Unlikely without gaps filled | Medium | Need tactical additions |
-
-**Why this baseline is achievable:**
-
-1. ✅ **Core transformations covered** (60-80 operators planned):
-   - Symmetries: ROT/FLIP/REFLECT/GLIDE/ALIGN/SHEAR
-   - Color logic: Permutation, conditional recolor, by rank/adjacency/parity
-   - Spatial: CROP/PASTE/SHIFT/MIRROR/ALIGN
-   - Objects: Components, masks by size/color/position/orientation
-   - Tiling: Translation vectors, motif repetition
-   - Drawing: Lines, boxes, crosses, checkerboard
-   - Composition: ON(mask), MERGE, multi-region gluing
-
-2. ✅ **Search strategy is sound**:
-   - Induction → Unification → Composition (massive search space reduction)
-   - Beam search with aggressive pruning (residual must not increase)
-   - Portfolio parallelism (symmetry-first, recolor-first, crop-first)
-   - Occam tie-breaking (shortest program wins)
-
-3. ✅ **Receipts ensure correctness**:
-   - Residual=0 verification catches bad programs early
-   - Edit bills prune contradictions
-   - No guessing or hallucination
-
-**What limits baseline coverage:**
-
-1. ❌ **Grid resizing operations** not explicit (affects 15-20% of tasks)
-2. ❌ **Physics simulation** not mentioned (affects 5-8% of tasks)
-3. ❌ **Path/connectivity** not detailed (affects 3-5% of tasks)
-4. ❌ **Explicit symbol learning** missing (critical for ARC-2)
-5. 🟡 **Some compositional patterns** may need depth >8
-
-### Evaluation Strategy: Implement → Measure → Fill Gaps
-
-**Phase 1: Baseline Implementation (Weeks 1-6)**
-
-Implement the plan as written:
-- 60-80 operators from sections 1-2
-- Invariant engine + typed DSL
-- Beam search with pruning
-- Induction/verification routines
-
-**Phase 1 Checkpoint (End of Week 6):**
-
-Run on full training set (1,000 tasks):
-```python
-results = evaluate_baseline(arc_training_data)
-
-# Expected metrics:
-# - Solved: 600-750/1000 (60-75%)
-# - ARC-1: 240-290/391 (61-74%)
-# - ARC-2: 360-460/609 (59-76%)
-# - Errors: <50 (robust error handling)
-```
-
-**Analyze failures by category:**
-```python
-failures = categorize_unsolved(results)
-
-# Expected distribution:
-# - Grid resizing: 80-120 tasks (20-30% of failures)
-# - Physics/gravity: 30-50 tasks (8-12% of failures)
-# - Symbol learning: 50-80 tasks (12-20% of failures)
-# - Path/connectivity: 15-30 tasks (4-8% of failures)
-# - Deep composition: 40-60 tasks (10-15% of failures)
-# - Novel patterns: 80-120 tasks (20-30% of failures)
-```
-
-**Decision point:** If baseline hits ≥65%, proceed to gap-filling. If <60%, debug search/induction logic first.
-
----
-
-### Gap-Filling Operators (Phase 2: Weeks 7-8)
-
-Add these operators **after** baseline evaluation confirms they're needed:
-
-#### A. Grid Resizing & Scaling (HIGH PRIORITY)
-
-**Why**: 15-20% of ARC tasks change grid dimensions beyond simple CROP.
-
-```python
-# Core operators:
-RESIZE(grid: Grid, new_H: Int, new_W: Int) -> Grid
-    # Change dimensions, preserve content placement
-    # Induction: detect H_out/H_in ratio, W_out/W_in ratio from train pairs
-
-EXPAND(grid: Grid, factor: Int) -> Grid
-    # Uniform scaling: 2x2 → 6x6 (factor=3, each cell becomes 3×3 block)
-    # Induction: detect factor from train pair size ratios
-
-PAD(grid: Grid, border: Int, fill_color: Color) -> Grid
-    # Add uniform border
-    # Induction: detect border width and fill color from train pairs
-
-UPSAMPLE(grid: Grid, factor: Int) -> Grid
-    # Pixel replication: each cell → factor×factor block
-    # Different from EXPAND: maintains aspect ratio
-
-DOWNSAMPLE(grid: Grid, factor: Int, method: str='mode') -> Grid
-    # Aggregate factor×factor blocks → single cell
-    # method: 'mode' (most common), 'first', 'sum'
-    # Induction: detect factor and aggregation method from train pairs
-
-SCALE_CONTENT(grid: Grid, scale_H: float, scale_W: float) -> Grid
-    # Non-uniform scaling of content
-    # Induction: fit content to output dimensions
-```
-
-**Induction strategy:**
-- Compute size ratios: `H_out/H_in`, `W_out/W_in`
-- If integer ratio: try EXPAND, UPSAMPLE
-- If content density changes: try DOWNSAMPLE
-- If border added: try PAD
-- Verify exact match on all train pairs
-
-**Expected gain:** +10-15% accuracy (100-150 additional tasks solved)
-
----
-
-#### B. Physics & Gravity Simulation (MEDIUM PRIORITY)
-
-**Why**: "Falling blocks", "stacking", "settling" tasks (~5-8% of ARC).
-
-```python
-# Core operators:
-FALL(grid: Grid, direction: str='down', stop_at: str='obstacle') -> Grid
-    # Objects fall in direction until hitting obstacle or boundary
-    # direction: 'down', 'up', 'left', 'right'
-    # stop_at: 'obstacle' (any non-bg), 'color:X', 'boundary'
-    # Induction: detect movement direction and stop condition from train pairs
-
-GRAVITY(grid: Grid, direction: str='down') -> Grid
-    # All non-background pixels fall simultaneously
-    # Handles collisions by stacking
-    # Induction: detect direction from train pair pixel movements
-
-STACK(objects: ObjList, direction: str='vertical', spacing: Int=0) -> Grid
-    # Pack objects along direction with optional spacing
-    # Induction: detect stacking direction and spacing from train pairs
-
-COMPACT(grid: Grid, axis: str='vertical') -> Grid
-    # Remove all empty rows/columns (no gaps)
-    # Induction: detect axis from train pair compression
-
-SETTLE(grid: Grid) -> Grid
-    # Iterative gravity until stable (no further movement)
-    # Induction: apply repeatedly until residual=0
-```
-
-**Induction strategy:**
-- Detect "moved objects" by tracking component positions input→output
-- Compute movement vectors (all same direction → GRAVITY)
-- Check if objects touch/stack → STACK
-- Verify movement rules (stop at obstacles, boundaries)
-
-**Expected gain:** +5-8% accuracy (50-80 additional tasks solved)
-
----
-
-#### C. Path & Connectivity (MEDIUM PRIORITY)
-
-**Why**: "Connect the dots", "maze solving", "trace path" tasks (~3-5% of ARC).
-
-```python
-# Core operators:
-TRACE_PATH(grid: Grid, start: Vec2, end: Vec2, via: str='shortest') -> Grid
-    # Draw path from start to end
-    # via: 'shortest', 'horizontal-first', 'vertical-first', 'diagonal'
-    # Induction: detect start/end from train pairs, infer routing method
-
-CONNECT(obj1: Object, obj2: Object, line_color: Color, via: str='straight') -> Grid
-    # Connect two objects with line
-    # via: 'straight', 'manhattan', 'avoid-obstacles'
-    # Induction: detect connection method from train pairs
-
-FLOOD_FILL(grid: Grid, start: Vec2, new_color: Color, match: str='same') -> Grid
-    # Standard flood fill
-    # match: 'same' (match start color), 'color:X', 'not:X'
-    # Induction: detect start position and fill rules from train pairs
-
-SHORTEST_PATH(grid: Grid, start: Vec2, end: Vec2, obstacles: Mask) -> Path
-    # Find shortest path avoiding obstacles
-    # Returns path (list of positions)
-    # Induction: detect start/end, identify obstacles as mask
-
-DRAW_LINE(grid: Grid, start: Vec2, end: Vec2, color: Color, thickness: Int=1) -> Grid
-    # Draw line (axis-aligned or diagonal)
-    # Induction: detect endpoints and color from train pairs
-```
-
-**Induction strategy:**
-- Detect "added lines" (pixels in output not in input)
-- Identify endpoints (component centroids, corners, edges)
-- Infer routing method (straight, Manhattan distance, avoiding obstacles)
-- Verify exact path matches on all train pairs
-
-**Expected gain:** +3-5% accuracy (30-50 additional tasks solved)
-
----
-
-#### D. Explicit Symbol Learning (ARC-2 CRITICAL)
-
-**Why**: ARC-2 introduced "in-context symbol definition" where objects represent meanings defined within the task.
-
-```python
-# Meta-reasoning operators:
-LEARN_SYMBOL_MAP(train_pairs: List[Tuple[Grid, Grid]]) -> Dict[Shape, Meaning]
-    # Extract "vocabulary" from train pairs
-    # Shape: canonical object representation (normalized pixels)
-    # Meaning: what the shape "does" (transformation, color, position rule)
-    # Example: Triangle → "points to next color", Square → "marks boundaries"
-
-APPLY_SYMBOL_SEMANTICS(test_grid: Grid, symbol_map: Dict) -> Grid
-    # Use learned symbol meanings to transform test grid
-    # 1. Detect symbols in test grid (match to learned shapes)
-    # 2. Apply their meanings (invoke learned transformations)
-    # 3. Verify consistency (same symbol → same action)
-
-INFER_RULE_FROM_CONTEXT(train_pairs: List) -> CompositeRule
-    # Meta-level: learn "rules about rules"
-    # Detect patterns in how transformations vary across train pairs
-    # Example: "symbol X defines rotation amount", "symbol Y defines target color"
-
-CONTEXT_DEPENDENT_TRANSFORM(grid: Grid, context: Dict) -> Grid
-    # Apply transformation that depends on extracted context
-    # context: extracted from grid itself (counts, positions, relationships)
-    # Example: "number of red cells defines rotation factor"
-```
-
-**Induction strategy (multi-phase):**
-
-**Phase 1: Symbol extraction**
-```python
-def extract_symbols(train_pairs):
-    # Find objects that appear consistently but with varying effects
-    all_objects = []
-    for inp, out in train_pairs:
-        all_objects.extend(detect_objects(inp))
-
-    # Cluster by shape (canonical form)
-    symbols = cluster_by_shape(all_objects)
-    return symbols
-```
-
-**Phase 2: Meaning inference**
-```python
-def infer_meanings(symbols, train_pairs):
-    meanings = {}
-    for symbol_shape in symbols:
-        # For each instance of this symbol, what changed nearby?
-        effects = []
-        for inp, out in train_pairs:
-            instances = find_symbol_instances(inp, symbol_shape)
-            for pos in instances:
-                local_change = compute_local_change(inp, out, pos, radius=3)
-                effects.append(local_change)
-
-        # Unify effects across all instances
-        unified_meaning = unify_effects(effects)
-        if unified_meaning:
-            meanings[symbol_shape] = unified_meaning
-
-    return meanings
-```
-
-**Phase 3: Application**
-```python
-def apply_learned_symbols(test_grid, symbol_map):
-    result = test_grid.copy()
-
-    for symbol_shape, meaning in symbol_map.items():
-        instances = find_symbol_instances(test_grid, symbol_shape)
-        for pos in instances:
-            # Apply meaning at this position
-            result = apply_transformation(result, meaning, pos)
-
-    return result
-```
-
-**Expected gain:** +8-12% accuracy on ARC-2 (50-70 additional tasks solved)
-
----
-
-#### E. Additional Supporting Operators
-
-**Fractal/Recursive patterns** (LOW-MEDIUM PRIORITY):
-```python
-RECURSE(grid: Grid, pattern: Grid, depth: Int) -> Grid
-    # Recursively apply pattern at multiple scales
-
-NEST(motif: Grid, iterations: Int, scale_factor: float=0.5) -> Grid
-    # Nested self-similar patterns
-
-SELF_SIMILAR(grid: Grid, levels: Int) -> Grid
-    # Generate self-similar structure
-```
-
-**Expected gain:** +1-2% accuracy (10-20 additional tasks)
-
-**Sorting/ordering spatial elements**:
-```python
-SORT_OBJECTS(objects: ObjList, key: str, direction: str='horizontal') -> ObjList
-    # key: 'x', 'y', 'size', 'color', 'distance_to_center'
-    # direction: 'horizontal', 'vertical', 'diagonal'
-    # Returns sorted list for subsequent operations
-```
-
-**Expected gain:** +1-2% accuracy (10-20 additional tasks)
-
-**Boundary operations**:
-```python
-TRACE_BOUNDARY(object: Object) -> Path
-    # Return boundary pixels of object
-
-PERIMETER_ONLY(grid: Grid, color: Color) -> Grid
-    # Keep only perimeter of colored regions
-
-OUTLINE(object: Object, thickness: Int, color: Color) -> Grid
-    # Draw outline around object
-```
-
-**Expected gain:** +1-2% accuracy (10-20 additional tasks)
-
----
-
-### Phase 2 Checkpoint (End of Week 8)
-
-After adding gap-filling operators:
-
-```python
-results_phase2 = evaluate_with_gaps_filled(arc_training_data)
-
-# Target metrics:
-# - Solved: 750-850/1000 (75-85%)
-# - ARC-1: 290-330/391 (74-84%)
-# - ARC-2: 460-520/609 (76-85%)
-# - Improvement: +15-20% from baseline
-```
-
-**Category coverage check:**
-```python
-coverage_by_category = {
-    'symmetries': 95%,          # Was 90%, +SHEAR/GLIDE
-    'color_logic': 90%,         # Was 85%, +parity/adjacency
-    'spatial_ops': 95%,         # Was 70%, +RESIZE/PAD/SCALE
-    'objects': 85%,             # Was 80%, +better masks
-    'tiling': 80%,              # Was 75%, +better detection
-    'drawing': 90%,             # Was 85%, +TRACE_PATH/CONNECT
-    'physics': 70%,             # Was 0%, +FALL/GRAVITY/STACK
-    'multi_region': 85%,        # Was 80%, +better composition
-    'symbol_learning': 60%,     # Was 0%, +LEARN_SYMBOL_MAP
-    'meta_reasoning': 50%,      # Was 0%, +INFER_RULE_FROM_CONTEXT
+## A) Observability & Coverage Harness (keep it lean but complete)
+
+**Why now:** We add operators (B) fastest when we can *see* where they will pay off. This is a **20–40 line** logging layer + a small runner. No dashboards.
+
+### A1. Receipts & telemetry JSONL (per task)
+
+**Add:** a function `log_receipt(record: dict)` writing to `runs/YYYY-MM-DD/receipts.jsonl`.
+
+**Schema (single line per task):**
+
+```json
+{
+  "task": "0a1d4ef8.json",
+  "status": "solved|failed",
+  "program": ["KEEP_LARGEST_COMPONENT(bg=0)", "OUTLINE_OBJECTS(t=1,mode='outer')"],
+  "total_residual": 0,
+  "residuals_per_pair": [0, 0, 0],
+  "palette_invariants": {"preserved": true, "delta": {"1": 0, "2": +4}},
+  "component_invariants": {"largest_kept": true, "count_delta": 0},
+  "beam": {"expanded": 143, "pruned": 412, "depth": 4},
+  "timing_ms": {"build_ops": 13, "beam": 97, "total": 122},
+  "hashes": {"task_sha": "...", "program_sha": "..."}
 }
 ```
 
----
+**Hook points:**
 
-### Phase 3: Deep Composition & Long-Tail (Weeks 9-10)
+* After each task is solved or declared failed in your public runner (e.g., `run_public(...)` or equivalent).
+* Inside the solver (e.g., `solve_task(...)` / `solve_with_beam(...)`) record beam stats and invariants (palette, component count, bbox deltas). Keep this lightweight.
 
-For remaining 15-20% unsolved tasks:
+**Deliverables:**
 
-**A. Increase search depth**
-- Extend beam search depth: 6-8 → 10-12 for complex tasks
-- Add "composition templates" for common multi-step patterns:
-  - "Detect → Transform → Place"
-  - "Extract → Sort → Arrange"
-  - "Partition → Apply → Merge"
-
-**B. Transfer learning**
-- Cache successful programs from similar tasks
-- Use program similarity metrics (edit distance on operators)
-- Suggest related programs as starting points for beam search
-
-**C. Ensemble/multi-solution**
-- When Occam tie occurs (multiple programs fit), keep top-3
-- At test time, if all 3 agree → high confidence
-- If disagree → report ambiguity with edit bills showing differences
-
-**Expected final accuracy:**
-- **ARC-1**: 80-88% (310-345/391 tasks)
-- **ARC-2**: 75-82% (457-500/609 tasks)
-- **Overall**: 77-84% (767-845/1000 tasks)
+* `runs/<date>/receipts.jsonl` with one line per task.
+* Minor helper: `ensure_dir("runs/<date>")`.
 
 ---
 
-### Summary: Baseline → Gaps Filled → Record
+### A2. Coverage runner + failure buckets
 
-| Phase | Operators | ARC-1 | ARC-2 | Overall | Record? |
-|-------|-----------|-------|-------|---------|---------|
-| **Baseline (Weeks 1-6)** | 60-80 from plan | 60-75% | 40-55% | 60-70% | ❌ Below 79.6% |
-| **+ Gaps (Weeks 7-8)** | +25-30 targeted | 75-85% | 60-75% | 75-83% | 🟡 Close/tied |
-| **+ Deep search (Weeks 9-10)** | Depth 10-12, templates | 80-88% | 75-82% | 77-84% | ✅ Beat 79.6% |
+**Add script:** `scripts/coverage.py`.
 
-**Key insight:** The baseline plan (60-80 ops) gets you to **60-70%**. Gap-filling adds **+15-20%**. Deep composition adds final **+2-4%** to surpass the record.
+**Responsibilities:**
 
-**Recommended strategy:**
-1. ✅ **Implement baseline first** (Weeks 1-6) → measure actual coverage
-2. ✅ **Prioritize gaps by frequency** in unsolved tasks (data-driven)
-3. ✅ **Add operators incrementally** with evaluation after each batch
-4. ✅ **Track receipts for every solved task** (maintain correctness)
-5. ✅ **Reserve deep composition for last 15-20%** (high cost/benefit ratio)
+* Invoke the public solver over the dataset directory (same entrypoint you already use).
+* Read `receipts.jsonl`.
+* **Cluster failures** into coarse buckets to guide operator work.
 
-This phased approach minimizes wasted effort and ensures you hit record-breaking performance (>79.6%) by Week 10 with verifiable receipts for every solution.
+**Failure signature (tuple) per failed task:**
+
+* `palette_delta_type`: `"preserve" | "single-color-add" | "recolor" | "unknown"`.
+* `component_count_delta`: `-1 | 0 | +1 | "varies"`.
+* `symmetry_flags`: `{v,h,diag,anti}` booleans detected on input vs. output deltas.
+* `bbox_delta_kind`: `"crop-to-largest" | "expand" | "none" | "unknown"`.
+* `motif_present`: `true|false` (detected by small repeating pattern).
+* `mask_hint`: `"background" | "nonzero" | "parity" | "border" | "stripe" | "unknown"`.
+
+**Outputs:**
+
+* `runs/<date>/fail_clusters.json` — array of `{signature, count, examples:[task_ids...]}` ordered by count descending.
+
+**Acceptance:**
+
+* Running `python scripts/coverage.py --arc_public_dir <path>` produces `receipts.jsonl` and `fail_clusters.json`.
+* Top 3 clusters obvious at a glance (which operator family to add next).
+
+---
+
+### A3. Micro‑cache
+
+* Add an in‑memory memo to avoid recomputing residuals for the **same prefix program** on **the same train set** during beam expansion:
+
+  * Key: `task_sha + program_prefix_sha`.
+  * Value: `residuals_per_pair`.
+* Keep the cache local to a single task run (no persistence needed).
+
+**Acceptance:**
+Beam expansions drop (log counts before/after via `beam.expanded`).
+
+---
+
+## B) Operator & Inducer Expansion (primary lever for coverage)
+
+**Principle:** Every operator is added with a **verifying inducer** that:
+
+1. Extracts parameters from **all** train pairs,
+2. Produces the **same** param set for all pairs,
+3. **Proves** `residual == 0` across all train pairs (else reject),
+4. Emits a concrete callable that the beam can use.
+
+**Integration point:** `autobuild_operators(train_pairs)` (or equivalent) should return an **ordered list** of ready‑to‑use operators (cheap → expensive).
+
+> Order matters. Put cheap, conservative edits first.
+
+Below are operator families to implement **in order**. For each, implement **(i) Operator**, **(ii) Inducer**, **(iii) Tests**, **(iv) Integrate**.
+
+---
+
+### B1) KEEP_LARGEST_COMPONENT
+
+**Operator:**
+
+```python
+def KEEP_LARGEST_COMPONENT(bg: int = 0) -> Callable[[Grid], Grid]:
+    ...
+```
+
+* Keep only the largest 4‑connected component (by pixel count), zero elsewhere.
+
+**Inducer (sketch):**
+
+* For each train pair `(x,y)`, compute objects on `x` (ignoring `bg`).
+* `y` should equal `x` but with all non‑largest components removed (allowing bbox crop or not — choose whichever **unifies across pairs**).
+* If true for *all* pairs, emit `Operator("KEEP_LARGEST_COMPONENT", {"bg": bg}, f)`.
+
+**Integration:** Insert after your existing crop/keep rules.
+
+**Tests:**
+
+* Positive: inputs with multiple blobs → output only largest blob.
+* Negative: pairs where output recolors or transforms (reject induction).
+
+---
+
+### B2) OUTLINE_OBJECTS
+
+**Operator:**
+
+```python
+def OUTLINE_OBJECTS(thickness: int = 1, mode: str = "outer", scope: str = "largest|all") -> Callable[[Grid], Grid]:
+    ...
+```
+
+* Outline via 4‑neighborhood; `mode="outer"` paints boundary cells that touch background.
+
+**Inducer:**
+
+* For each train `(x,y)`, compute `outline(x)` under a small set of candidates:
+
+  * `thickness ∈ {1}`, `mode ∈ {"outer","inner"}`, `scope ∈ {"largest","all"}`.
+* Find the candidate whose `outline(x)` equals `y` for **all pairs**. Emit operator.
+
+**Integration:** After B1.
+
+---
+
+### B3) AXIS_PROJECTION_FILL
+
+**Operator:**
+
+```python
+def PROJECT_ALONG_AXIS(axis: str = "row|col", mode: str = "to_border|to_obstacle", scope: str = "largest|all") -> Callable[[Grid], Grid]:
+    ...
+```
+
+* Extend object pixels along the chosen axis until image border or first obstacle (non‑bg).
+
+**Inducer:**
+
+* For each candidate `(axis, mode, scope)`, apply projection to `x` and compare to `y` across all pairs.
+* If one candidate matches all, emit operator.
+
+**Integration:** After B2.
+
+---
+
+### B4) SYMMETRY_COMPLETION
+
+**Operator:**
+
+```python
+def REFLECT_COMPLETE(axis: str = "v|h|diag|anti", scope: str = "global|largest|per_object") -> Callable[[Grid], Grid]:
+    ...
+```
+
+* Reflect selected content and union with the original.
+
+**Inducer:**
+
+* For each `axis`, check if `y == x ∪ reflect_axis(x)` (with `scope` variants).
+* Emit only if one axis and scope unify across all pairs.
+
+**Integration:** After B3.
+
+---
+
+### B5) LINE_FROM_EXTREMA
+
+**Operator:**
+
+```python
+def DRAW_LINE(strategy: str = "furthest_pair|bbox_corners|centroids", color: str = "object|dominant") -> Callable[[Grid], Grid]:
+    ...
+```
+
+* Draw straight line between chosen points; Bresenham or simple DDA on grid.
+
+**Inducer:**
+
+* Enumerate candidate strategies; verify `x + line == y` across pairs.
+
+**Integration:** After B4.
+
+---
+
+### B6) RECOLOR_BY_ROLE
+
+**Operator:**
+
+```python
+def RECOLOR_BY_ROLE(role: str = "background|largest|rarest", to: str = "dominant_border|mode_inside|fixed") -> Callable[[Grid], Grid]:
+    ...
+```
+
+* Map colors by detected role to a unified target color.
+
+**Inducer:**
+
+* Check if palette delta matches role mapping identically across pairs (e.g., background→dominant_border color).
+
+**Integration:** After B5.
+
+---
+
+### B7) MORPHOLOGY (small k)
+
+**Operator:**
+
+```python
+def DILATE(k: int = 1) -> Callable[[Grid], Grid]: ...
+def ERODE(k: int = 1) -> Callable[[Grid], Grid]: ...
+```
+
+**Inducer:**
+
+* For k in {1,2} (start with 1):
+
+  * If `DILATE(x,k) == y` across pairs → emit. Same for `ERODE`.
+
+**Integration:** After B6.
+
+---
+
+### B8) QUADRANT_MAPPING
+
+**Operator:**
+
+```python
+def MAP_QUADRANTS(rule: str) -> Callable[[Grid], Grid]:
+    # rule encodes copy/transform from source quadrant to targets
+```
+
+**Inducer:**
+
+* Split grid into 2×2 quadrants; check if `y` is obtained by copying/rotating one quadrant to others (enumerate a small ruleset).
+* Emit if a single rule explains all pairs.
+
+**Integration:** After B7.
+
+---
+
+### (Note on Tiling/Mask)
+
+You already have tiling+mask working. As a follow‑up, **expand the mask template set** (used in induction only; masks must be *input‑only*):
+
+* `ALL`, `NONZERO`, `BACKGROUND`, `NOT_LARGEST`, `PARITY(anchor)`, `BORDER_RING(k)`, `STRIPES(axis,k)`
+  Each template must unify across *all* train pairs and still yield residual==0.
+
+---
+
+## D) Fail‑Driven Autobuilder (keep B fed continuously)
+
+**Purpose:** When a task fails, the system proposes **new, concrete operators/inducers** that are likely to solve that failure cluster. You approve, implement, and re‑run. This converts manual discovery into a loop.
+
+**Workflow:**
+
+1. After a public run, read `receipts.jsonl` to gather failed tasks.
+2. For each failed task, compute a **fail signature** (same as A2).
+3. Based on the signature, fire **pattern miners** that propose parameterized operators with verifying inducers.
+
+### D1. Δ‑Pattern Miner → `COPY_BY_DELTAS`
+
+* For each train pair, detect matched objects (same color & size or shape hash).
+* Compute displacement vectors `(Δr, Δc)` between input and output counterparts.
+* If the **same Δ** (or small set like ±Δ) unifies across all pairs, propose:
+
+  * `COPY_BY_DELTAS(global Δ)` or
+  * `COPY_BY_DELTAS_PER_COLOR({color_i: Δ_i})`
+* Include an inducer that verifies residual==0 on all pairs.
+
+### D2. Motif Miner → `REPEAT_TILE_ON_MASK`
+
+* Extract small motif `M` present in output.
+* Search mask templates **from input only** (background, nonzero, not_largest, parity, stripes).
+* If one mask template with `M` explains **all** train pairs (IoU == 1.0 between edited set and mask), propose operator + inducer.
+
+### D3. Mask Miner → Recolor/Border/Stripe fills
+
+* If residuals lie on borders, stripes, or parity sets, propose:
+
+  * `RECOLOR_BY_MASK(template, target_color_strategy)`
+  * `BORDER_FILL(k)`
+* The inducer selects template + target color (e.g., mode on border pixels) and proves residual==0.
+
+**Deliverable:**
+`d_suggestions.json` — list of `{task, signature, proposed_operator_spec, expected_inducer_checks}` for manual acceptance.
+
+**Acceptance:**
+
+* For ≥80% of fails in top 2 clusters, D proposes at least one operator spec that, once implemented, solves examples representative of that cluster.
+
+---
+
+## Wiring & Order of Execution
+
+1. **Implement A (A1–A3)**
+
+   * Logging (JSONL), coverage runner, minimal cache.
+   * **Outcome:** You can see where to spend time in B.
+
+2. **Implement B operators (in order):**
+   B1 KEEP_LARGEST_COMPONENT → B2 OUTLINE_OBJECTS → B3 AXIS_PROJECTION_FILL →
+   B4 SYMMETRY_COMPLETION → B5 LINE_FROM_EXTREMA → B6 RECOLOR_BY_ROLE → B7 MORPH (k=1) → B8 QUADRANT_MAPPING.
+
+   * Integrate each with its inducer into `autobuild_operators(train_pairs)` (cheap to expensive).
+   * After each two families, run coverage, inspect receipts, choose next.
+
+3. **Enable D (continuous):**
+
+   * After each public run, generate `fail_clusters.json`, run miners (D1–D3), produce `d_suggestions.json`.
+   * Approve and implement the highest‑value suggestions, then re‑run coverage.
+
+4. **Optional later:**
+
+   * **C (Guided beam):** add a node score `(sum_residual, -pairs_at_zero, program_length)` and tiny operator priors.
+   * **E (Perf):** cache candidate ops per task signature; parallel jobs if desired.
+
+---
+
+## Code Sketches (for Claude to implement)
+
+> These are short sketches; integrate with your existing helpers (`components`, `equal`, etc.) and array type (list or numpy). Ensure all inducers **prove residual==0 across *all* train pairs** before emitting.
+
+### KEEP_LARGEST_COMPONENT
+
+```python
+def KEEP_LARGEST_COMPONENT(bg: int = 0):
+    def f(z):
+        H, W = z.shape
+        out = np.zeros_like(z)
+        objs = components(z, bg=bg)  # returns list with .pixels, .size, .color, .bbox
+        if not objs: return out
+        largest = max(objs, key=lambda o: o.size)
+        for (r, c) in largest.pixels:
+            out[r, c] = largest.color
+        return out
+    return f
+
+def induce_KEEP_LARGEST(train, bg=0):
+    P = KEEP_LARGEST_COMPONENT(bg)
+    for x, y in train:
+        if not np.array_equal(P(x), y):
+            return []
+    return [Operator("KEEP_LARGEST_COMPONENT", {"bg": bg}, P, "keep-largest")]
+```
+
+### OUTLINE_OBJECTS
+
+```python
+def OUTLINE_OBJECTS(thickness=1, mode="outer", scope="all"):
+    def neighbors4(r,c,H,W):
+        if r>0:   yield r-1,c
+        if r+1<H: yield r+1,c
+        if c>0:   yield r,c-1
+        if c+1<W: yield r,c+1
+    def f(z):
+        H, W = z.shape
+        out = np.zeros_like(z)
+        objs = components(z, bg=0)
+        targets = [max(objs, key=lambda o:o.size)] if scope == "largest" else objs
+        for o in targets:
+            pix_set = set(o.pixels)
+            for (r,c) in o.pixels:
+                for (nr,nc) in neighbors4(r,c,H,W):
+                    if (nr,nc) not in pix_set:  # touching background => boundary
+                        out[r,c] = o.color
+                        break
+        return out
+    return f
+
+def induce_OUTLINE(train):
+    candidates = [("outer","largest"), ("outer","all")]
+    for mode, scope in candidates:
+        P = OUTLINE_OBJECTS(1, mode, scope)
+        if all(np.array_equal(P(x), y) for x,y in train):
+            return [Operator("OUTLINE_OBJECTS", {"t":1,"mode":mode,"scope":scope}, P, "outline")]
+    return []
+```
+
+### PROJECT_ALONG_AXIS
+
+```python
+def PROJECT_ALONG_AXIS(axis="row", mode="to_border", scope="all"):
+    def f(z):
+        H, W = z.shape
+        out = z.copy()
+        objs = components(z, bg=0)
+        targets = [max(objs, key=lambda o:o.size)] if scope=="largest" else objs
+        for o in targets:
+            for (r,c) in o.pixels:
+                if axis == "row":
+                    step = [(r,k) for k in range(0, c)] if mode=="to_border" else [(r,c-1)]
+                    for (rr,cc) in step: out[rr,cc] = o.color
+                    step = [(r,k) for k in range(c+1, W)] if mode=="to_border" else [(r,c+1)]
+                    for (rr,cc) in step: out[rr,cc] = o.color
+                else:  # col
+                    step = [(k,c) for k in range(0, r)] if mode=="to_border" else [(r-1,c)]
+                    for (rr,cc) in step: out[rr,cc] = o.color
+                    step = [(k,c) for k in range(r+1, H)] if mode=="to_border" else [(r+1,c)]
+                    for (rr,cc) in step: out[rr,cc] = o.color
+        return out
+    return f
+
+def induce_PROJECT(train):
+    for axis in ("row","col"):
+        for mode in ("to_border","to_obstacle"):  # start with to_border
+            for scope in ("largest","all"):
+                P = PROJECT_ALONG_AXIS(axis, mode, scope)
+                if all(np.array_equal(P(x), y) for x,y in train):
+                    return [Operator("PROJECT_ALONG_AXIS", {"axis":axis,"mode":mode,"scope":scope}, P, "project")]
+    return []
+```
+
+*(Similarly implement SYMMETRY_COMPLETION, LINE_FROM_EXTREMA, RECOLOR_BY_ROLE, DILATE/ERODE, QUADRANT_MAPPING with the same pattern.)*
+
+---
+
+## Integration Order in `autobuild_operators(train_pairs)` (cheap → expensive)
+
+```python
+def autobuild_operators(train):
+    ops = []
+    # existing simple ops...
+    ops += induce_KEEP_LARGEST(train, bg=0)         # B1
+    ops += induce_OUTLINE(train)                    # B2
+    ops += induce_PROJECT(train)                    # B3
+    ops += induce_REFLECT_COMPLETE(train)           # B4
+    ops += induce_DRAW_LINE(train)                  # B5
+    ops += induce_RECOLOR_BY_ROLE(train)            # B6
+    ops += induce_MORPH(train)                      # B7
+    ops += induce_MAP_QUADRANTS(train)              # B8
+    # existing tiling/mask (with expanded mask templates)
+    return ops
+```
+
+---
+
+## Running Loop
+
+1. **Public run (with A enabled):**
+
+   ```
+   python ui_clean.py --arc_public_dir <path> --out_json runs/<date>/predictions.json --beam 160 --depth 6 --jobs 8
+   ```
+
+   (Adjust flags to your runner’s interface.)
+
+2. **Inspect outputs:**
+
+   * `runs/<date>/receipts.jsonl`
+   * `runs/<date>/fail_clusters.json`
+
+3. **Add next operators (B)**
+
+   * Follow the ordered list; after each pair of operator families, re‑run public and observe deltas.
+
+4. **Invoke D (continuous)**
+
+   * Run miners on fails, generate `d_suggestions.json`.
+   * Approve one or two high‑value suggestions; implement (with verifying inducers) and re‑run.
+
+5. *(Optional)* **C: Guided beam**
+
+   * If expansion is heavy: add node score `(sum_residual, -pairs_at_zero, program_length)` and small operator priors to order expansions.
+
+6. *(Optional)* **E: Perf**
+
+   * Cache candidate ops per task signature; optionally parallelize.
+
+---
+
+## Acceptance & Milestones
+
+* **Milestone 1 (A complete):**
+
+  * `receipts.jsonl` and `fail_clusters.json` produced; micro‑cache active; you can grep for top fail signatures.
+
+* **Milestone 2 (B1–B3 live):**
+
+  * KEEP_LARGEST, OUTLINE, PROJECT implemented with inducers and integrated; **coverage up materially** (expect +tens of solves on public).
+
+* **Milestone 3 (B4–B6 live):**
+
+  * Reflection completion, line drawing, recolor by role added; another coverage bump.
+
+* **Milestone 4 (D loop active):**
+
+  * `d_suggestions.json` emitted after runs; at least one suggestion per top cluster; accepted suggestions convert to new inducers that verify residual==0 across pairs.
+
+* **Definition of Done (per operator family):**
+
+  1. Operator callable implemented.
+  2. Inducer proves residual==0 across all train pairs or rejects.
+  3. Integrated into `autobuild_operators` in the specified order.
+  4. Unit tests on synthetic pairs + at least 2 public tasks solved primarily by this operator.
+
+---
+
+## Notes for Claude Code
+
+* **No partial acceptance:** an inducer either unifies parameters across **all** train pairs and verifies residual==0, or it returns `[]` (do not add operator).
+* **Keep logs tiny:** JSONL only, one line per task; no plotting/UI required.
+* **Prefer input‑only masks** in all mask‑based inducers (no peeking at ground truth except for verification).
+* **When in doubt, be conservative:** prefer operators that preserve palette/structure unless receipts prove otherwise.
+
+---
+
+Use this plan verbatim to start: **implement A1–A3, then B1–B3, then enable D miners**.
+Re‑run public after each step, and let receipts + fail clusters tell you the next operator to add.
+---
+1. A1 — Hash computation
+
+* task_sha: SHA-256 over a canonical JSON of all train pairs. Serialize as
+
+  ```
+  {"train":[{"in": grid_to_list(x), "out": grid_to_list(y)}, ...]}
+  ```
+
+  Use ints only, no numpy types, sorted keys, no whitespace variance. Example:
+
+  ```python
+  def task_sha(train_pairs):
+      payload = {"train":[{"in":x.tolist(), "out":y.tolist()} for x,y in train_pairs]}
+      return sha256(json.dumps(payload, sort_keys=True).encode())
+  ```
+* program_sha: SHA-256 over the operator sequence with names and params, in order.
+
+  ```python
+  def program_sha(ops):
+      payload = [{"name":op.name, "params":op.params} for op in ops]  # params must be JSON serializable and with sorted keys
+      return sha256(json.dumps(payload, sort_keys=True).encode())
+  ```
+
+2. A1 — Invariants tracking
+
+* Yes, add helpers in utils.py:
+
+  * `compute_palette_delta(x, y) -> {"preserved": bool, "delta": {color: int}}` where delta is count_y[color] − count_x[color].
+  * `compute_component_delta(x, y) -> {"count_delta": int, "largest_kept": bool, "size_largest_x": int, "size_largest_y": int}` using your existing components routine.
+* Where to track: inside `solve_with_beam` just before returning a solution or declaring failure. Compute per pair then aggregate:
+
+  * palette_invariants: preserved is `all(p["preserved"] for p in per_pair)` and include a merged delta by summing deltas.
+  * component_invariants: count_delta could be mode or list, largest_kept is `all`.
+* Include these fields in the JSONL record.
+
+3. A2 — Coverage runner integration
+
+* Prefer importable runner. Create `run_solver(dataset_dir, out_dir) -> None` in `ui_clean.py` that writes receipts.jsonl to `out_dir` and returns nothing.
+* `scripts/coverage.py` should import `run_solver` and then read `receipts.jsonl` to produce `fail_clusters.json`.
+* Only use subprocess if import is not feasible. Import keeps logs and errors cleaner.
+
+4. B — Integration order with existing inducers
+   Interleave by cost and payoff. Use this order in `autobuild_operators(train)`:
+
+1) COLOR_PERM
+2) ROT_FLIP
+3) PARITY_CONST
+4) CROP_KEEP
+5) KEEP_LARGEST_COMPONENT   ← B1
+6) OUTLINE_OBJECTS          ← B2
+7) PROJECT_ALONG_AXIS       ← B3
+8) SYMMETRY_COMPLETION      ← B4
+9) LINE_FROM_EXTREMA        ← B5
+10) RECOLOR_BY_ROLE         ← B6
+11) MORPH_DILATE_ERODE      ← B7
+12) QUADRANT_MAPPING        ← B8
+13) TILING                  (with input-only mask induction)
+14) HOLE_FILL
+15) COPY_BY_DELTAS
+    Reasoning: 1–3 are ultra cheap and often decisive. 4–7 are cheap to moderate and unlock many public tasks. 8–12 are moderate. 13–15 can be heavier or more brittle, so keep later.
+
+5. A — Complete before B?
+
+* Do A1 first. It is small and gives you receipts immediately.
+* You can start B in parallel right after A1. Do not block on A2 or A3.
+* Add A2 minimal clustering after your first B1–B3 pass to guide the next operator choices.
+* Add A3 micro-cache when you notice beam expansion costs rising.
+
+If you want a snippet for the JSONL writer or the exact invariant helpers, say the word and I will drop them in ready to paste.

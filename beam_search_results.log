@@ -1,0 +1,40 @@
+ARC Solver - Test Coverage Generator
+======================================================================
+Loading tasks...
+Testing 1000 tasks...
+  Progress: 100/1000 tasks (10.0%)
+  Progress: 200/1000 tasks (20.0%)
+  Progress: 300/1000 tasks (30.0%)
+  Progress: 400/1000 tasks (40.0%)
+  Progress: 500/1000 tasks (50.0%)
+  Progress: 600/1000 tasks (60.0%)
+  Progress: 700/1000 tasks (70.0%)
+  Progress: 800/1000 tasks (80.0%)
+  Progress: 900/1000 tasks (90.0%)
+  Progress: 1000/1000 tasks (100.0%)
+
+Results saved to /Users/ravishq/code/arc-agi-1/docs/test_coverage_data.json
+
+======================================================================
+TEST COVERAGE SUMMARY
+======================================================================
+Generated: 2025-10-13
+Solver: Modular v2.0.0 (BEAM SEARCH: depth=4, beam=50, 10 base rules, composition enabled)
+
+Total Tests: 1076
+Passing: 14 (1.30%)
+ARC-1: 14/407 (3.44%)
+ARC-2: 0/669 (0.00%)
+
+Rules Used:
+  ROT: 3
+  COLOR_PERM: 3
+  MOVE_OBJ_RANK: 2
+  FLIP: 2
+  RECOLOR_OBJ_RANK: 1
+  CROP_BBOX_NONZERO: 1
+  COMPOSED: 1
+  TILE: 1
+======================================================================
+
+Next: Update TEST_COVERAGE.md manually or run report generator

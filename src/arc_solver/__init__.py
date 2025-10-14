@@ -1,71 +1,64 @@
 """
-ARC Solver - Modular Architecture
-==================================
+ARC Solver - Universe Intelligence Approach
 
-A receipts-first ARC-AGI solver using Universe Intelligence principles.
-
-Main components:
-- core: Types, invariants, receipts, induction, solver
-- operators: DSL operators (symmetry, spatial, masks, composition)
-
-Quick start:
-    >>> from arc_solver import G, solve_instance, ARCInstance
-    >>> from arc_solver.core import rot180
-    >>>
-    >>> # Create task
-    >>> x = G([[0,1],[2,0]])
-    >>> y = rot180(x)
-    >>> task = ARCInstance("demo", [(x,y)], [G([[0,3],[4,0]])], [rot180(G([[0,3],[4,0]]))])
-    >>>
-    >>> # Solve
-    >>> result = solve_instance(task)
-    >>> print(f"Rule: {result.rule.name}, Accuracy: {result.acc_exact}")
+Modular implementation of inducer-based operator discovery for ARC-AGI.
 """
 
-# Core exports
-from .core import (
-    # Types
-    Grid, Mask, ObjList, G, copy_grid, assert_grid, assert_mask,
-    # Invariants
-    Invariants, invariants, color_histogram, bbox_nonzero,
-    connected_components, rot90, rot180, rot270, flip_h, flip_v, exact_equals,
-    # Receipts
-    Receipts, edit_counts, residual, generate_pce, verify_train_residuals_zero,
-    # Induction
-    Rule, CATALOG, induce_rule,
-    # Solver
-    ARCInstance, SolveResult, solve_instance, solve_with_beam,
+from .types import Grid, Operator, ARCInstance, Node
+from .utils import (
+    G, equal, residual, inb,
+    bbox_nonzero, components, rank_by_size
 )
-
-# Operator exports
 from .operators import (
-    # Symmetry
-    ROT, FLIP,
-    # Spatial
-    BBOX, CROP, CROP_BBOX_NONZERO,
-    # Masks
-    MASK_COLOR, MASK_NONZERO, KEEP, REMOVE,
-    # Composition
-    ON, SEQ,
+    ROT, FLIP, COLOR_PERM,
+    CROP_BBOX_NONZERO, KEEP_NONZERO,
+    RECOLOR_PARITY_CONST, PARITY_MASK,
+    REPEAT_TILE, extract_motif,
+    HOLE_FILL_ALL, fill_holes_in_bbox,
+    COPY_OBJ_RANK_BY_DELTAS
 )
-
-__version__ = '1.0.0'
+from .inducers import (
+    induce_COLOR_PERM,
+    induce_ROT_FLIP,
+    induce_CROP_KEEP,
+    induce_PARITY_CONST,
+    induce_TILING_AND_MASK,
+    induce_HOLE_FILL,
+    induce_COPY_BY_DELTAS
+)
+from .search import (
+    autobuild_operators,
+    beam_search,
+    solve_with_beam
+)
 
 __all__ = [
     # Types
-    'Grid', 'Mask', 'ObjList', 'G', 'copy_grid', 'assert_grid', 'assert_mask',
-    # Invariants
-    'Invariants', 'invariants', 'color_histogram', 'bbox_nonzero',
-    'connected_components', 'rot90', 'rot180', 'rot270', 'flip_h', 'flip_v',
-    'exact_equals',
-    # Receipts
-    'Receipts', 'edit_counts', 'residual', 'generate_pce',
-    'verify_train_residuals_zero',
-    # Induction
-    'Rule', 'CATALOG', 'induce_rule',
-    # Solver
-    'ARCInstance', 'SolveResult', 'solve_instance', 'solve_with_beam',
+    'Grid', 'Operator', 'ARCInstance', 'Node',
+
+    # Utils
+    'G', 'equal', 'residual', 'inb',
+    'bbox_nonzero', 'components', 'rank_by_size',
+
     # Operators
-    'ROT', 'FLIP', 'BBOX', 'CROP', 'CROP_BBOX_NONZERO',
-    'MASK_COLOR', 'MASK_NONZERO', 'KEEP', 'REMOVE', 'ON', 'SEQ',
+    'ROT', 'FLIP', 'COLOR_PERM',
+    'CROP_BBOX_NONZERO', 'KEEP_NONZERO',
+    'RECOLOR_PARITY_CONST', 'PARITY_MASK',
+    'REPEAT_TILE', 'extract_motif',
+    'HOLE_FILL_ALL', 'fill_holes_in_bbox',
+    'COPY_OBJ_RANK_BY_DELTAS',
+
+    # Inducers
+    'induce_COLOR_PERM',
+    'induce_ROT_FLIP',
+    'induce_CROP_KEEP',
+    'induce_PARITY_CONST',
+    'induce_TILING_AND_MASK',
+    'induce_HOLE_FILL',
+    'induce_COPY_BY_DELTAS',
+
+    # Search
+    'autobuild_operators',
+    'beam_search',
+    'solve_with_beam',
 ]
