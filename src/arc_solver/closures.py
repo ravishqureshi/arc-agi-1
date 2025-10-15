@@ -51,7 +51,7 @@ class KEEP_LARGEST_COMPONENT_Closure(Closure):
     def apply(self, U: SetValuedGrid, x_input: Grid) -> SetValuedGrid:
         # Fail loudly if bg not provided (unifier MUST set it)
         bg = self.params["bg"]
-        objs = components(x_input, bg)
+        objs = components(x_input, bg=bg)
 
         if not objs:
             # No components - everything becomes background
@@ -62,8 +62,8 @@ class KEEP_LARGEST_COMPONENT_Closure(Closure):
                     U_new.intersect(r, c, bg_mask)
             return U_new
 
-        # Find largest component
-        largest = max(objs, key=lambda o: o.size)
+        # Find largest component (deterministic tie-breaking by bbox position)
+        largest = max(objs, key=lambda o: (o.size, -o.bbox[0], -o.bbox[1]))
 
         # Build set of pixels in largest component
         largest_pixels = set(largest.pixels)

@@ -258,20 +258,18 @@ def solve_with_closures(inst: ARCInstance):
         return None, [], [], metadata
 
     # Verify closures on train
-    train_ok = True
+    from .closure_engine import verify_closures_on_train
+
     t_fp_start = time.time()
-    fp_iters_list = []
-
-    for x, y in inst.train:
-        U_final, fp_stats = run_fixed_point(closures, x)
-        fp_iters_list.append(fp_stats["iters"])
-
-        y_pred = U_final.to_grid()
-        if y_pred is None or not equal(y_pred, y):
-            train_ok = False
-            break
-
+    train_ok = verify_closures_on_train(closures, inst.train)
     t_fp_end = time.time()
+
+    # Get fp_iters_list for metadata (re-run to collect stats)
+    fp_iters_list = []
+    if train_ok:
+        for x, y in inst.train:
+            U_final, fp_stats = run_fixed_point(closures, x)
+            fp_iters_list.append(fp_stats["iters"])
 
     if not train_ok:
         # Closures don't solve train exactly
@@ -297,8 +295,17 @@ def solve_with_closures(inst: ARCInstance):
         U_final, fp_stats = run_fixed_point(closures, x_test)
         test_fp_iters.append(fp_stats["iters"])
 
-        # Extract bg from first closure (all should have same bg for B1)
-        bg = closures[0].params.get("bg", 0) if closures else 0
+        # Extract bg from first closure that defines it
+        # (Not all closures have bg - e.g., OUTLINE, MOD_PATTERN, etc.)
+        bg = None
+        for closure in closures:
+            if "bg" in closure.params:
+                bg = closure.params["bg"]
+                break
+
+        # If no closure defines bg, fail loudly
+        if bg is None:
+            raise ValueError(f"No closure defines 'bg' parameter. Closures: {[c.name for c in closures]}")
 
         y_pred = U_final.to_grid_deterministic(fallback='lowest', bg=bg)
         preds.append(y_pred)
@@ -309,9 +316,19 @@ def solve_with_closures(inst: ARCInstance):
     # Compute invariants
     palette_deltas = []
     component_deltas = []
+
+    # Extract bg from closures (safe extraction)
+    bg = None
+    for closure in closures:
+        if "bg" in closure.params:
+            bg = closure.params["bg"]
+            break
+    if bg is None:
+        raise ValueError(f"No closure defines 'bg' parameter for invariants. Closures: {[c.name for c in closures]}")
+
     for x, y in inst.train:
         palette_deltas.append(compute_palette_delta(x, y))
-        component_deltas.append(compute_component_delta(x, y, bg=0))
+        component_deltas.append(compute_component_delta(x, y, bg=bg))
 
     palette_preserved = all(pd["preserved"] for pd in palette_deltas)
     merged_palette_delta = {}

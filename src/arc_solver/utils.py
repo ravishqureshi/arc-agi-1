@@ -37,7 +37,7 @@ def inb(r: int, c: int, H: int, W: int) -> bool:
     return 0 <= r < H and 0 <= c < W
 
 
-def bbox_nonzero(g: Grid, bg: int = 0) -> Tuple[int, int, int, int]:
+def bbox_nonzero(g: Grid, *, bg: int) -> Tuple[int, int, int, int]:
     """
     Get bounding box of non-background cells.
     Returns: (r0, c0, r1, c1)
@@ -50,7 +50,7 @@ def bbox_nonzero(g: Grid, bg: int = 0) -> Tuple[int, int, int, int]:
     return (int(r0), int(c0), int(r1), int(c1))
 
 
-def components(g: Grid, bg: int = 0) -> List[Obj]:
+def components(g: Grid, *, bg: int) -> List[Obj]:
     """
     Extract connected components (4-connected).
     Returns list of Obj with color, pixels, size, bbox, centroid.
@@ -221,7 +221,7 @@ def compute_palette_delta(x: Grid, y: Grid) -> Dict:
     return {"preserved": preserved, "delta": delta}
 
 
-def compute_component_delta(x: Grid, y: Grid, bg: int = 0) -> Dict:
+def compute_component_delta(x: Grid, y: Grid, *, bg: int) -> Dict:
     """
     Compute component invariants between input and output.
 
@@ -233,8 +233,8 @@ def compute_component_delta(x: Grid, y: Grid, bg: int = 0) -> Dict:
     Returns:
         {"count_delta": int, "largest_kept": bool, "size_largest_x": int, "size_largest_y": int}
     """
-    x_objs = components(x, bg)
-    y_objs = components(y, bg)
+    x_objs = components(x, bg=bg)
+    y_objs = components(y, bg=bg)
 
     count_delta = len(y_objs) - len(x_objs)
     size_largest_x = max([o.size for o in x_objs], default=0)

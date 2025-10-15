@@ -161,8 +161,8 @@ def induce_HOLE_FILL(train, bg=0) -> List[Operator]:
 def enumerate_deltas_for_pair(x: Grid, y: Grid, bg=0) -> List[Tuple[int, int]]:
     """Enumerate centroid deltas between objects in x and y."""
     deltas = set()
-    X = components(x, bg)
-    Y = components(y, bg)
+    X = components(x, bg=bg)
+    Y = components(y, bg=bg)
     if not X or not Y:
         return []
     for xi, xo in enumerate(X):

@@ -91,13 +91,13 @@ class SetValuedGrid:
                         break
         return result
 
-    def to_grid_deterministic(self, fallback: str = 'lowest', bg: int = 0) -> Grid:
+    def to_grid_deterministic(self, *, fallback: str = 'lowest', bg: int) -> Grid:
         """
         Convert to deterministic grid, breaking ties deterministically.
 
         Args:
-            fallback: 'lowest' (pick lowest color) or 'random'
-            bg: Background color to use for empty cells (default: 0)
+            fallback: 'lowest' (pick lowest color) or 'random' (keyword-only)
+            bg: Background color to use for empty cells (REQUIRED keyword-only, no default)
 
         Returns:
             Grid with deterministic choice for each cell
@@ -107,7 +107,7 @@ class SetValuedGrid:
             for c in range(self.W):
                 mask = self.data[r, c]
                 if mask == 0:
-                    result[r, c] = bg  # Empty → background
+                    result[r, c] = bg  # Empty → background (bg must be provided by caller)
                 else:
                     # Pick lowest color from set
                     for color in range(10):

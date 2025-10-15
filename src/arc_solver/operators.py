@@ -43,7 +43,7 @@ def CROP_BBOX_NONZERO(bg: int = 0) -> Callable:
     from .utils import bbox_nonzero
 
     def f(z: Grid):
-        r0, c0, r1, c1 = bbox_nonzero(z, bg)
+        r0, c0, r1, c1 = bbox_nonzero(z, bg=bg)
         return z[r0:r1 + 1, c0:c1 + 1]
     return f
 
@@ -64,7 +64,7 @@ def KEEP_LARGEST_COMPONENT(bg: int = 0) -> Callable:
     All other cells become background.
     """
     def f(z: Grid):
-        objs = components(z, bg)
+        objs = components(z, bg=bg)
         if not objs:
             return np.full_like(z, bg)
 
@@ -202,7 +202,7 @@ def HOLE_FILL_ALL(bg: int = 0) -> Callable:
     """Fill holes in all objects."""
     def f(z: Grid):
         out = z.copy()
-        for o in components(z, bg):
+        for o in components(z, bg=bg):
             r0, c0, r1, c1 = o.bbox
             sub = out[r0:r1 + 1, c0:c1 + 1]
             out[r0:r1 + 1, c0:c1 + 1] = fill_holes_in_bbox(sub, o.color, bg)
@@ -220,7 +220,7 @@ def COPY_OBJ_RANK_BY_DELTAS(rank: int, deltas: List[Tuple[int, int]], group: str
 
     def f(z: Grid):
         H, W = z.shape
-        objs = components(z, bg)
+        objs = components(z, bg=bg)
         out = z.copy()
         if not objs:
             return out
