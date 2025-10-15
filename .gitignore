@@ -21,3 +21,5 @@ data/
 # IDE
 .vscode/
 .idea/
+
+runs/

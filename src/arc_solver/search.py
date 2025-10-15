@@ -10,6 +10,7 @@ from .inducers import (
     induce_COLOR_PERM,
     induce_ROT_FLIP,
     induce_CROP_KEEP,
+    induce_KEEP_LARGEST,
     induce_PARITY_CONST,
     induce_TILING_AND_MASK,
     induce_HOLE_FILL,
@@ -21,13 +22,17 @@ def autobuild_operators(train) -> List[Operator]:
     """
     Try all inducers and return operators with train residual=0.
 
-    This is where we add new inducers as we expand coverage.
+    Ordered by cost (cheap → expensive) per IMPLEMENTATION_PLAN.md.
     """
     ops = []
+    # 1-4: Ultra cheap and often decisive
     ops += induce_COLOR_PERM(train)
     ops += induce_ROT_FLIP(train)
-    ops += induce_CROP_KEEP(train, bg=0)
     ops += induce_PARITY_CONST(train)
+    ops += induce_CROP_KEEP(train, bg=0)
+    # 5: B1 - Keep largest component
+    ops += induce_KEEP_LARGEST(train, bg=0)
+    # Later: More expensive operators
     ops += induce_TILING_AND_MASK(train)
     ops += induce_HOLE_FILL(train, bg=0)
     ops += induce_COPY_BY_DELTAS(train, rank=-1, group='global', bg=0)
@@ -198,3 +203,151 @@ def solve_with_beam(inst: ARCInstance, max_depth=6, beam_size=160):
                       for i in range(len(preds))]
 
     return steps, preds, test_residuals, metadata
+
+
+# ==============================================================================
+# Closure-based solver (Master Operator paradigm)
+# ==============================================================================
+
+def autobuild_closures(train):
+    """
+    Try all unifiers and return closures that produce exact output on train.
+
+    Ordered by cost (cheap → expensive).
+    """
+    from .closures import unify_KEEP_LARGEST
+
+    closures = []
+    # B1: KEEP_LARGEST_COMPONENT
+    closures += unify_KEEP_LARGEST(train)
+    # TODO: Add more closure families as they're implemented
+
+    return closures
+
+
+def solve_with_closures(inst: ARCInstance):
+    """
+    Solve ARC instance with fixed-point closure engine.
+
+    Returns:
+        (closures, preds, residuals, metadata)
+        - closures: List of closures if solved, else None
+        - preds: Predictions on test inputs
+        - residuals: Residuals for test outputs
+        - metadata: Dict with fp stats, timing, invariants
+    """
+    from .closure_engine import run_fixed_point
+
+    t_start = time.time()
+
+    # Try all unifiers
+    t_unify_start = time.time()
+    closures = autobuild_closures(inst.train)
+    t_unify_end = time.time()
+
+    if not closures:
+        # No closures found
+        metadata = {
+            "fp": {"iters": 0, "cells_multi": -1},
+            "timing_ms": {"unify": 0, "total": int((time.time() - t_start) * 1000)},
+            "total_residual": sum(residual(x, y) for x, y in inst.train),
+            "residuals_per_pair": [residual(x, y) for x, y in inst.train],
+            "palette_invariants": {},
+            "component_invariants": {}
+        }
+        return None, [], [], metadata
+
+    # Verify closures on train
+    train_ok = True
+    t_fp_start = time.time()
+    fp_iters_list = []
+
+    for x, y in inst.train:
+        U_final, fp_stats = run_fixed_point(closures, x)
+        fp_iters_list.append(fp_stats["iters"])
+
+        y_pred = U_final.to_grid()
+        if y_pred is None or not equal(y_pred, y):
+            train_ok = False
+            break
+
+    t_fp_end = time.time()
+
+    if not train_ok:
+        # Closures don't solve train exactly
+        metadata = {
+            "fp": {"iters": max(fp_iters_list) if fp_iters_list else 0, "cells_multi": -1},
+            "timing_ms": {
+                "unify": int((t_unify_end - t_unify_start) * 1000),
+                "fp": int((t_fp_end - t_fp_start) * 1000),
+                "total": int((time.time() - t_start) * 1000)
+            },
+            "total_residual": sum(residual(x, y) for x, y in inst.train),
+            "residuals_per_pair": [residual(x, y) for x, y in inst.train],
+            "palette_invariants": {},
+            "component_invariants": {}
+        }
+        return None, [], [], metadata
+
+    # Predict on test
+    preds = []
+    test_fp_iters = []
+
+    for x_test in inst.test_in:
+        U_final, fp_stats = run_fixed_point(closures, x_test)
+        test_fp_iters.append(fp_stats["iters"])
+
+        # Extract bg from first closure (all should have same bg for B1)
+        bg = closures[0].params.get("bg", 0) if closures else 0
+
+        y_pred = U_final.to_grid_deterministic(fallback='lowest', bg=bg)
+        preds.append(y_pred)
+
+    test_residuals = [residual(preds[i], inst.test_out[i]) if i < len(inst.test_out) else -1
+                      for i in range(len(preds))]
+
+    # Compute invariants
+    palette_deltas = []
+    component_deltas = []
+    for x, y in inst.train:
+        palette_deltas.append(compute_palette_delta(x, y))
+        component_deltas.append(compute_component_delta(x, y, bg=0))
+
+    palette_preserved = all(pd["preserved"] for pd in palette_deltas)
+    merged_palette_delta = {}
+    for pd in palette_deltas:
+        for color, delta in pd["delta"].items():
+            merged_palette_delta[color] = merged_palette_delta.get(color, 0) + delta
+
+    component_count_deltas = [cd["count_delta"] for cd in component_deltas]
+    largest_kept_all = all(cd["largest_kept"] for cd in component_deltas)
+
+    palette_invariants = {
+        "preserved": palette_preserved,
+        "delta": merged_palette_delta
+    }
+
+    component_invariants = {
+        "largest_kept": largest_kept_all,
+        "count_delta": component_count_deltas[0] if len(set(component_count_deltas)) == 1 else "varies"
+    }
+
+    # Build metadata
+    t_end = time.time()
+    metadata = {
+        "fp": {
+            "iters": max(fp_iters_list + test_fp_iters),
+            "cells_multi": 0  # All singletons if we got here
+        },
+        "timing_ms": {
+            "unify": int((t_unify_end - t_unify_start) * 1000),
+            "fp": int((t_fp_end - t_fp_start) * 1000),
+            "total": int((t_end - t_start) * 1000)
+        },
+        "total_residual": 0,  # Train exactness guaranteed
+        "residuals_per_pair": [0] * len(inst.train),
+        "palette_invariants": palette_invariants,
+        "component_invariants": component_invariants
+    }
+
+    return closures, preds, test_residuals, metadata

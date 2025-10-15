@@ -1,0 +1,130 @@
+diff --git a/src/arc_solver/closures.py b/src/arc_solver/closures.py
+index original..fixed 100644
+--- a/src/arc_solver/closures.py
++++ b/src/arc_solver/closures.py
+@@ -48,7 +48,8 @@ class KEEP_LARGEST_COMPONENT_Closure(Closure):
+     """
+
+     def apply(self, U: SetValuedGrid, x_input: Grid) -> SetValuedGrid:
+-        bg = self.params.get("bg", 0)
++        # Fail loudly if bg not provided (unifier MUST set it)
++        bg = self.params["bg"]
+         objs = components(x_input, bg)
+
+         if not objs:
+@@ -85,21 +86,27 @@ class KEEP_LARGEST_COMPONENT_Closure(Closure):
+         return U_new
+
+
+-def unify_KEEP_LARGEST(train: List[Tuple[Grid, Grid]], bg: int = 0) -> List[Closure]:
++def unify_KEEP_LARGEST(train: List[Tuple[Grid, Grid]]) -> List[Closure]:
+     """
+     Unifier for KEEP_LARGEST_COMPONENT.
+
+-    Returns: [KEEP_LARGEST] if verified on all train pairs.
++    Tries all possible bg values {0-9} and returns closures for those that verify.
+
+-    Verifies that for ALL train pairs, the closure produces exact output.
++    Returns:
++        List of KEEP_LARGEST closures (one per valid bg value)
++        Empty list if no bg value works
+     """
+     from .closure_engine import run_fixed_point, verify_closures_on_train
+
+-    keep_largest = KEEP_LARGEST_COMPONENT_Closure("KEEP_LARGEST_COMPONENT", {"bg": bg})
+-
+-    closures = [keep_largest]
++    valid_closures = []
+
+-    # Verify on train
+-    if verify_closures_on_train(closures, train):
+-        return closures
++    # Try all possible background colors
++    for bg in range(10):
++        candidate = KEEP_LARGEST_COMPONENT_Closure(
++            f"KEEP_LARGEST_COMPONENT[bg={bg}]",
++            {"bg": bg}
++        )
++        if verify_closures_on_train([candidate], train):
++            valid_closures.append(candidate)
+
+-    return []
++    return valid_closures
+diff --git a/src/arc_solver/closure_engine.py b/src/arc_solver/closure_engine.py
+index original..fixed 100644
+--- a/src/arc_solver/closure_engine.py
++++ b/src/arc_solver/closure_engine.py
+@@ -13,6 +13,10 @@ from dataclasses import dataclass
+ from .types import Grid
+
+
++# Maximum iterations for fixed-point convergence (safety net; Tarski guarantees finite)
++DEFAULT_MAX_ITERS = 100
++
++
+ # ==============================================================================
+ # Set-Valued Grid Representation
+ # ==============================================================================
+@@ -87,7 +91,7 @@ class SetValuedGrid:
+                         break
+         return result
+
+-    def to_grid_deterministic(self, fallback: str = 'lowest') -> Grid:
++    def to_grid_deterministic(self, fallback: str = 'lowest', bg: int = 0) -> Grid:
+         """
+         Convert to deterministic grid, breaking ties deterministically.
+
+@@ -102,7 +106,7 @@ class SetValuedGrid:
+             for c in range(W):
+                 mask = self.data[r, c]
+                 if mask == 0:
+-                    result[r, c] = 0  # Empty → background
++                    result[r, c] = bg  # Empty → background
+                 else:
+                     # Pick lowest color from set
+                     for color in range(10):
+@@ -198,7 +202,7 @@ class Closure:
+
+ def run_fixed_point(closures: List[Closure],
+                     x_input: Grid,
+-                    max_iters: int = 100) -> Tuple[SetValuedGrid, Dict]:
++                    max_iters: int = DEFAULT_MAX_ITERS) -> Tuple[SetValuedGrid, Dict]:
+     """
+     Run fixed-point iteration until convergence.
+
+@@ -210,6 +214,10 @@ def run_fixed_point(closures: List[Closure],
+     Returns:
+         (U_final, stats) where stats = {"iters": N, "cells_multi": M}
+     """
++    # NOTE: Assumes output shape = input shape
++    # ARCHITECTURE_DEBT: For crop/pad/tile closures, shape must be parametric
++    # (passed via closure params or inferred from train outputs)
++    # This is correct for B1 (KEEP_LARGEST) which preserves shape.
+     H, W = x_input.shape
+     U = init_top(H, W)
+
+diff --git a/src/arc_solver/search.py b/src/arc_solver/search.py
+index original..fixed 100644
+--- a/src/arc_solver/search.py
++++ b/src/arc_solver/search.py
+@@ -219,7 +219,7 @@ def autobuild_closures(train):
+
+     closures = []
+     # B1: KEEP_LARGEST_COMPONENT
+-    closures += unify_KEEP_LARGEST(train, bg=0)
++    closures += unify_KEEP_LARGEST(train)
+     # TODO: Add more closure families as they're implemented
+
+     return closures
+@@ -297,7 +297,10 @@ def solve_with_closures(inst: ARCInstance):
+         U_final, fp_stats = run_fixed_point(closures, x_test)
+         test_fp_iters.append(fp_stats["iters"])
+
+-        y_pred = U_final.to_grid_deterministic(fallback='lowest')
++        # Extract bg from first closure (all should have same bg for B1)
++        bg = closures[0].params.get("bg", 0) if closures else 0
++
++        y_pred = U_final.to_grid_deterministic(fallback='lowest', bg=bg)
+         preds.append(y_pred)
+
+     test_residuals = [residual(preds[i], inst.test_out[i]) if i < len(inst.test_out) else -1

@@ -1,0 +1,471 @@
+"""
+Minimal property tests for closure soundness.
+
+Tests mathematical properties required by Tarski fixed-point theorem:
+1. Monotonicity: F(U) ⊆ F(V) when U ⊆ V
+2. Shrinking: F(U) ⊆ U
+3. Idempotence: F(F(U)) = F(U)
+4. Train exactness: U* = singleton(y) for ALL train pairs
+5. Convergence: Fixed-point reached in finite steps
+
+These are decisive micro-tests (2-3 grids per family).
+Each test should complete in <10ms.
+"""
+
+import numpy as np
+import sys
+import os
+
+# Add src to path
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
+
+from arc_solver.closure_engine import (
+    SetValuedGrid,
+    init_top,
+    init_from_grid,
+    color_to_mask,
+    run_fixed_point,
+    verify_closures_on_train
+)
+from arc_solver.closures import KEEP_LARGEST_COMPONENT_Closure, unify_KEEP_LARGEST
+
+
+# ==============================================================================
+# Helper Functions
+# ==============================================================================
+
+def grid_subset_or_equal(U: SetValuedGrid, V: SetValuedGrid) -> bool:
+    """Check if U ⊆ V (U has fewer or equal possibilities)."""
+    if U.H != V.H or U.W != V.W:
+        return False
+    for r in range(U.H):
+        for c in range(U.W):
+            # U[r,c] ⊆ V[r,c] ⇔ U[r,c] & V[r,c] == U[r,c]
+            if (U.data[r, c] & V.data[r, c]) != U.data[r, c]:
+                return False
+    return True
+
+
+def make_test_grid_1() -> np.ndarray:
+    """
+    Small test grid with two components:
+    - Large component (5 cells, color 1)
+    - Small component (2 cells, color 2)
+    """
+    return np.array([
+        [0, 1, 1, 0],
+        [1, 1, 1, 2],
+        [0, 0, 2, 0]
+    ], dtype=int)
+
+
+def make_test_grid_2() -> np.ndarray:
+    """
+    Test grid with single large component (color 3).
+    """
+    return np.array([
+        [3, 3, 0],
+        [3, 3, 3],
+        [0, 3, 3]
+    ], dtype=int)
+
+
+def make_expected_output_1() -> np.ndarray:
+    """Expected output for test_grid_1 (keep only largest component)."""
+    return np.array([
+        [0, 1, 1, 0],
+        [1, 1, 1, 0],
+        [0, 0, 0, 0]
+    ], dtype=int)
+
+
+def make_expected_output_2() -> np.ndarray:
+    """Expected output for test_grid_2 (entire component kept)."""
+    return np.array([
+        [3, 3, 0],
+        [3, 3, 3],
+        [0, 3, 3]
+    ], dtype=int)
+
+
+# ==============================================================================
+# Property 1: Monotonicity
+# ==============================================================================
+
+def test_monotonicity_keep_largest():
+    """
+    Test: F(U) ⊆ F(V) when U ⊆ V
+
+    Setup:
+    - U = tight grid (singletons from input)
+    - V = loose grid (all colors allowed)
+    - U ⊆ V by construction
+
+    Verify:
+    - F(U) ⊆ F(V) after applying KEEP_LARGEST
+    """
+    x = make_test_grid_1()
+
+    # U is tight (each cell = singleton from input)
+    U = init_from_grid(x)
+
+    # V is loose (each cell = all colors)
+    V = init_top(x.shape[0], x.shape[1])
+
+    # Verify precondition: U ⊆ V
+    assert grid_subset_or_equal(U, V), "Precondition failed: U should be subset of V"
+
+    # Apply closure
+    closure = KEEP_LARGEST_COMPONENT_Closure("test", {"bg": 0})
+    U_result = closure.apply(U, x)
+    V_result = closure.apply(V, x)
+
+    # Verify postcondition: F(U) ⊆ F(V)
+    assert grid_subset_or_equal(U_result, V_result), \
+        "Monotonicity violated: F(U) should be subset of F(V)"
+
+
+# ==============================================================================
+# Property 2: Shrinking
+# ==============================================================================
+
+def test_shrinking_keep_largest():
+    """
+    Test: F(U) ⊆ U (closure only removes possibilities)
+
+    Setup:
+    - U = top element (all colors allowed)
+
+    Verify:
+    - F(U) ⊆ U (result has fewer or equal possibilities)
+    """
+    x = make_test_grid_1()
+    U = init_top(x.shape[0], x.shape[1])
+
+    # Store original for comparison
+    U_copy = U.copy()
+
+    # Apply closure
+    closure = KEEP_LARGEST_COMPONENT_Closure("test", {"bg": 0})
+    U_result = closure.apply(U, x)
+
+    # Verify: F(U) ⊆ U
+    assert grid_subset_or_equal(U_result, U_copy), \
+        "Shrinking violated: F(U) should be subset of U"
+
+    # Extra check: Count bits before/after
+    bits_before = sum(bin(int(U_copy.data[r, c])).count('1')
+                      for r in range(U.H) for c in range(U.W))
+    bits_after = sum(bin(int(U_result.data[r, c])).count('1')
+                     for r in range(U.H) for c in range(U.W))
+
+    assert bits_after <= bits_before, \
+        f"Shrinking violated: bits increased from {bits_before} to {bits_after}"
+
+
+# ==============================================================================
+# Property 3: Idempotence
+# ==============================================================================
+
+def test_idempotence_keep_largest():
+    """
+    Test: F(F(U)) = F(U) (applying twice is same as once)
+
+    Setup:
+    - U = top element
+
+    Verify:
+    - F(U) = F(F(U)) (second application doesn't change result)
+    """
+    x = make_test_grid_1()
+    U = init_top(x.shape[0], x.shape[1])
+
+    closure = KEEP_LARGEST_COMPONENT_Closure("test", {"bg": 0})
+
+    # Apply once
+    U1 = closure.apply(U, x)
+
+    # Apply twice
+    U2 = closure.apply(U1, x)
+
+    # Verify: F(U) = F(F(U))
+    assert U1 == U2, "Idempotence violated: F(F(U)) != F(U)"
+
+    # Extra check: Verify bitwise equality
+    assert np.array_equal(U1.data, U2.data), \
+        "Idempotence violated: data arrays differ"
+
+
+def test_idempotence_stabilizes_in_2_passes():
+    """
+    Test: Fixed-point stabilizes in ≤2 passes for KEEP_LARGEST.
+
+    This is a stronger property: not just idempotent, but converges quickly.
+    """
+    x = make_test_grid_1()
+    closure = KEEP_LARGEST_COMPONENT_Closure("test", {"bg": 0})
+
+    U, stats = run_fixed_point([closure], x, max_iters=10)
+
+    # KEEP_LARGEST should stabilize in 1 pass (deterministic mask application)
+    assert stats["iters"] <= 2, \
+        f"Expected convergence in ≤2 iterations, got {stats['iters']}"
+
+
+# ==============================================================================
+# Property 4: Train Exactness
+# ==============================================================================
+
+def test_train_exactness_single_pair():
+    """
+    Test: Closure produces exact output on single train pair.
+
+    Verify:
+    - Fixed-point U* is fully determined (all singletons)
+    - U* equals expected output exactly
+    """
+    x = make_test_grid_1()
+    y = make_expected_output_1()
+
+    closure = KEEP_LARGEST_COMPONENT_Closure("test", {"bg": 0})
+    U, stats = run_fixed_point([closure], x)
+
+    # Check 1: Fully determined
+    assert U.is_fully_determined(), \
+        f"Not fully determined: {stats['cells_multi']} cells still multi-valued"
+
+    # Check 2: Exact match
+    y_pred = U.to_grid()
+    assert y_pred is not None, "to_grid() returned None"
+    assert np.array_equal(y_pred, y), \
+        f"Predicted output doesn't match expected.\nPred:\n{y_pred}\nExpected:\n{y}"
+
+
+def test_train_exactness_multiple_pairs():
+    """
+    Test: Unifier verifies ALL train pairs.
+
+    Verify:
+    - Same closure works on multiple pairs
+    - Returns [] if ANY pair fails
+    """
+    train = [
+        (make_test_grid_1(), make_expected_output_1()),
+        (make_test_grid_2(), make_expected_output_2())
+    ]
+
+    # Unifier discovers bg from data (should find bg=0)
+    closures = unify_KEEP_LARGEST(train)
+
+    assert len(closures) >= 1, f"Expected at least 1 closure, got {len(closures)}"
+    # Should find bg=0 since both pairs use black background
+    assert any(c.params["bg"] == 0 for c in closures), "Should find bg=0"
+
+    # Verify each pair manually
+    for x, y in train:
+        U, _ = run_fixed_point(closures, x)
+        y_pred = U.to_grid()
+        assert y_pred is not None, f"Failed to solve train pair"
+        assert np.array_equal(y_pred, y), \
+            f"Train exactness violated.\nInput:\n{x}\nPred:\n{y_pred}\nExpected:\n{y}"
+
+
+def test_train_exactness_rejects_bad_params():
+    """
+    Test: Unifier returns [] if parameters don't work on ALL pairs.
+
+    Create mismatched train pairs where no single bg works.
+    """
+    # Pair 1: largest component is color 1
+    x1 = np.array([[1, 1], [0, 2]])
+    y1 = np.array([[1, 1], [0, 0]])  # Expects bg=0
+
+    # Pair 2: largest component is color 2, but bg=1 needed
+    x2 = np.array([[2, 2], [1, 0]])
+    y2 = np.array([[2, 2], [0, 0]])  # Still expects bg=0
+
+    train = [(x1, y1), (x2, y2)]
+
+    # This should succeed (both use bg=0, unifier discovers it)
+    closures = unify_KEEP_LARGEST(train)
+    assert len(closures) >= 1, "Expected unifier to succeed"
+    assert any(c.params["bg"] == 0 for c in closures), "Should find bg=0"
+
+    # Now try with mismatched outputs that don't match KEEP_LARGEST logic
+    train_bad = [
+        (x1, y1),  # Works with bg=0
+        (x1, np.array([[1, 1], [1, 2]]))  # Would need bg=2 (doesn't match y1)
+    ]
+
+    closures_bad = unify_KEEP_LARGEST(train_bad)
+    assert len(closures_bad) == 0, "Expected unifier to reject mismatched train pairs"
+
+
+# ==============================================================================
+# Property 5: Convergence
+# ==============================================================================
+
+def test_convergence_detects_fixed_point():
+    """
+    Test: Fixed-point iteration detects true convergence.
+
+    Verify:
+    - Iteration stops when U_n = U_{n-1}
+    - Applying closure one more time doesn't change U
+    """
+    x = make_test_grid_1()
+    closure = KEEP_LARGEST_COMPONENT_Closure("test", {"bg": 0})
+
+    U_final, stats = run_fixed_point([closure], x)
+
+    # Apply one more time - should not change
+    U_again = closure.apply(U_final, x)
+
+    assert U_final == U_again, \
+        "Convergence failed: applying closure to fixed point changed it"
+
+
+def test_convergence_is_fast():
+    """
+    Test: KEEP_LARGEST converges in ≤2 iterations.
+
+    Since masks are deterministic from input, should stabilize quickly.
+    (Iteration 1: apply closure; Iteration 2: verify no change)
+    """
+    x = make_test_grid_1()
+    closure = KEEP_LARGEST_COMPONENT_Closure("test", {"bg": 0})
+
+    U, stats = run_fixed_point([closure], x)
+
+    # Should converge in ≤2 passes (1 to apply, 1 to verify)
+    assert stats["iters"] <= 2, \
+        f"Expected ≤2 iterations for deterministic closure, got {stats['iters']}"
+
+
+# ==============================================================================
+# Edge Cases
+# ==============================================================================
+
+def test_edge_case_empty_grid():
+    """
+    Test: Empty grid (all background) handled correctly.
+    """
+    x = np.array([[0, 0], [0, 0]], dtype=int)
+    y = np.array([[0, 0], [0, 0]], dtype=int)
+
+    closure = KEEP_LARGEST_COMPONENT_Closure("test", {"bg": 0})
+    U, _ = run_fixed_point([closure], x)
+
+    y_pred = U.to_grid()
+    assert y_pred is not None
+    assert np.array_equal(y_pred, y), \
+        f"Empty grid not handled correctly.\nPred:\n{y_pred}\nExpected:\n{y}"
+
+
+def test_edge_case_single_component():
+    """
+    Test: Single component is trivially the largest.
+    """
+    x = np.array([[1, 1], [1, 0]], dtype=int)
+    y = np.array([[1, 1], [1, 0]], dtype=int)  # Same as input
+
+    closure = KEEP_LARGEST_COMPONENT_Closure("test", {"bg": 0})
+    U, _ = run_fixed_point([closure], x)
+
+    y_pred = U.to_grid()
+    assert y_pred is not None
+    assert np.array_equal(y_pred, y)
+
+
+def test_edge_case_equal_size_components():
+    """
+    Test: Multiple equal-size components - picks first deterministically.
+    """
+    x = np.array([
+        [1, 1, 0, 2, 2],  # Two 2-cell components
+        [0, 0, 0, 0, 0]
+    ], dtype=int)
+
+    closure = KEEP_LARGEST_COMPONENT_Closure("test", {"bg": 0})
+
+    # Apply twice - should get same result (deterministic tie-break)
+    U1, _ = run_fixed_point([closure], x)
+    U2, _ = run_fixed_point([closure], x)
+
+    assert U1 == U2, "Equal-size component selection not deterministic"
+
+
+# ==============================================================================
+# Summary Test
+# ==============================================================================
+
+def test_all_properties_together():
+    """
+    Integration test: Verify all properties in realistic scenario.
+    """
+    x = make_test_grid_1()
+    y = make_expected_output_1()
+
+    # Create closure
+    closure = KEEP_LARGEST_COMPONENT_Closure("test", {"bg": 0})
+
+    # Property 1: Shrinking
+    U = init_top(x.shape[0], x.shape[1])
+    U_shrunk = closure.apply(U, x)
+    assert grid_subset_or_equal(U_shrunk, U), "Not shrinking"
+
+    # Property 2: Idempotent
+    U_again = closure.apply(U_shrunk, x)
+    assert U_shrunk == U_again, "Not idempotent"
+
+    # Property 3: Train exact
+    U_final, stats = run_fixed_point([closure], x)
+    assert U_final.is_fully_determined(), "Not fully determined"
+    y_pred = U_final.to_grid()
+    assert np.array_equal(y_pred, y), "Not train exact"
+
+    # Property 4: Fast convergence
+    assert stats["iters"] <= 2, f"Too many iterations: {stats['iters']}"
+
+
+# ==============================================================================
+# Run Tests
+# ==============================================================================
+
+if __name__ == "__main__":
+    # Run all tests
+    tests = [
+        ("Monotonicity", test_monotonicity_keep_largest),
+        ("Shrinking", test_shrinking_keep_largest),
+        ("Idempotence", test_idempotence_keep_largest),
+        ("Idempotence (2-pass)", test_idempotence_stabilizes_in_2_passes),
+        ("Train exactness (single)", test_train_exactness_single_pair),
+        ("Train exactness (multiple)", test_train_exactness_multiple_pairs),
+        ("Train exactness (rejects bad)", test_train_exactness_rejects_bad_params),
+        ("Convergence (fixed-point)", test_convergence_detects_fixed_point),
+        ("Convergence (fast)", test_convergence_is_fast),
+        ("Edge case (empty)", test_edge_case_empty_grid),
+        ("Edge case (single)", test_edge_case_single_component),
+        ("Edge case (equal-size)", test_edge_case_equal_size_components),
+        ("Integration (all properties)", test_all_properties_together),
+    ]
+
+    passed = 0
+    failed = 0
+
+    for name, test_fn in tests:
+        try:
+            test_fn()
+            print(f"✓ {name}")
+            passed += 1
+        except AssertionError as e:
+            print(f"✗ {name}: {e}")
+            failed += 1
+        except Exception as e:
+            print(f"✗ {name}: EXCEPTION: {e}")
+            failed += 1
+
+    print(f"\n{passed}/{len(tests)} tests passed")
+
+    if failed > 0:
+        sys.exit(1)

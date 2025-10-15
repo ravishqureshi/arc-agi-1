@@ -163,6 +163,37 @@ def program_sha(ops: List) -> str:
     return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
 
 
+def closure_set_sha(closures: List) -> str:
+    """
+    Compute SHA-256 hash of closure sequence.
+
+    Args:
+        closures: List of Closure objects
+
+    Returns:
+        Hex string of SHA-256 hash
+    """
+    if not closures:
+        return hashlib.sha256(b"[]").hexdigest()
+
+    # Convert to JSON-serializable format
+    payload = []
+    for closure in closures:
+        params_serializable = {}
+        for k, v in closure.params.items():
+            if isinstance(v, (int, float, str, bool, type(None))):
+                params_serializable[k] = v
+            elif isinstance(v, dict):
+                params_serializable[k] = {str(kk): vv for kk, vv in v.items()}
+            elif isinstance(v, (list, tuple)):
+                params_serializable[k] = list(v)
+            else:
+                params_serializable[k] = str(v)
+        payload.append({"name": closure.name, "params": params_serializable})
+
+    return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
+
+
 # ==============================================================================
 # Invariant computation for receipts
 # ==============================================================================

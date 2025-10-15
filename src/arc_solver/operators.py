@@ -58,6 +58,28 @@ def KEEP_NONZERO(bg: int = 0) -> Callable:
     return f
 
 
+def KEEP_LARGEST_COMPONENT(bg: int = 0) -> Callable:
+    """
+    Keep only the largest connected component (by pixel count).
+    All other cells become background.
+    """
+    def f(z: Grid):
+        objs = components(z, bg)
+        if not objs:
+            return np.full_like(z, bg)
+
+        # Find largest by size
+        largest = max(objs, key=lambda o: o.size)
+
+        # Create output with only largest component
+        out = np.full_like(z, bg)
+        for (r, c) in largest.pixels:
+            out[r, c] = largest.color
+
+        return out
+    return f
+
+
 # ==============================================================================
 # Color operators
 # ==============================================================================

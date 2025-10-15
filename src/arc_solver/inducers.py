@@ -12,7 +12,7 @@ from .types import Operator, Grid
 from .utils import equal, components
 from .operators import (
     COLOR_PERM, ROT, FLIP,
-    CROP_BBOX_NONZERO, KEEP_NONZERO,
+    CROP_BBOX_NONZERO, KEEP_NONZERO, KEEP_LARGEST_COMPONENT,
     RECOLOR_PARITY_CONST, PARITY_MASK,
     REPEAT_TILE, extract_motif,
     HOLE_FILL_ALL,
@@ -88,6 +88,17 @@ def induce_CROP_KEEP(train, bg=0) -> List[Operator]:
     if all(equal(P2(x), y) for x, y in train):
         out.append(Operator("KEEP_NONZERO", {"bg": bg}, P2, "Keep non-zero"))
     return out
+
+
+def induce_KEEP_LARGEST(train, bg=0) -> List[Operator]:
+    """
+    Induce KEEP_LARGEST_COMPONENT operator.
+    Verifies that output equals input with only largest component kept.
+    """
+    P = KEEP_LARGEST_COMPONENT(bg)
+    if all(equal(P(x), y) for x, y in train):
+        return [Operator("KEEP_LARGEST_COMPONENT", {"bg": bg}, P, "Keep largest component")]
+    return []
 
 
 # ==============================================================================

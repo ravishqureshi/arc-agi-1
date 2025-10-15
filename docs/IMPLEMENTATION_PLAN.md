@@ -611,3 +611,135 @@ Re‑run public after each step, and let receipts + fail clusters tell you the n
 * Add A3 micro-cache when you notice beam expansion costs rising.
 
 If you want a snippet for the JSONL writer or the exact invariant helpers, say the word and I will drop them in ready to paste.
+---
+Here’s a clean, receipts-first “gap audit” of your plan with the specific missing pieces to take UI to 100% ARC-AGI territory—no hand-waving, just the concrete items to add, why they’re needed, and how to prove each one. This keeps us in full universe-functioning discipline:
+	•	inside settles → accept only programs with train residual = 0
+	•	edges write → log edit bills
+	•	observer = observed → same parameters must fit all train pairs
+
+⸻
+
+1) Operator catalog — final coverage (what still needs to exist)
+
+You already have symmetry, crop/keep, color perm, parity, tiling (+ on mask), hole-fill, lines, quadrants, repetition/copy-by-deltas, equalize per color. Add these to close the remaining ARC pattern families:
+	1.	Mask calculus (boolean algebra)
+	•	MASK_AND/OR/XOR/NOT(A,B) with receipts ensuring shape alignment.
+	•	Induction: mask = (x≠y) ∧ predicate(…) verified by exact equality.
+	2.	Morphology (complete set)
+	•	DILATE, ERODE, OPEN, CLOSE, OUTLINE, FILL_OUTLINE, SKELETONIZE(1-step)
+	•	Induction: show y == op(x) on every train; receipts: area/perimeter deltas per step.
+	3.	Growth/Shrink (object padding)
+	•	GROW_OBJ_RANK(rank, r) / SHRINK_OBJ_RANK(rank, r) (add/remove 4-conn shell r times).
+	•	Induction: bbox/area change matches train; residual=0.
+	4.	Diagonal repetition + general modulo patterns
+	•	REPEAT_DIAGONAL(Δ=(dr,dc), k);
+	•	MOD_PATTERN(p_row, p_col, anchor): generalizes parity (period 2) to any (p,q).
+	•	Induction: recover p,q,anchor from repeat in y; verify residual=0.
+	5.	Quadrant-on-mask & reflect-on-mask
+	•	QUADRANT_TILE_ON_MASK(mask), REFLECT_ON_MASK(axis|diag, mask)
+	•	Induction: m=(x≠y); confirm y = reflect/tile(x) on m.
+	6.	Stencil / negative-space (cut & paste)
+	•	APPLY_STENCIL(stencil_rect, target_color): fill zero-cells within stencil;
+	•	NEGATIVE_SPACE_IN_BBOX(rank) (invert inside object bbox).
+	•	Induction: y equals x within (~mask) and equals stencil on mask.
+	7.	Adjacency-driven color logic
+	•	RECOLOR_IF_TOUCHES(color_a → color_b); BORDER_TOUCH_RECOLOR(color)
+	•	Induction: build adjacency graph; verify affected pixels are exactly y.
+	8.	Object arithmetic (finals)
+	•	MATCH_COUNTS_GLOBAL(k) (copy smallest until total objects == k)
+	•	MATCH_COUNTS_BY_COLOR({c: k_c})
+	•	Induction: infer k/k_c from train; unify Δ-sets; exact fit.
+	9.	Object merge / split
+	•	MERGE_NEARBY(d) (components within L1≤d fuse) / SPLIT_BY_LINE
+	•	Induction: residual=0; receipts: component count deltas.
+	10.	Render from summary (rare but appears)
+	•	RENDER_BAR(height, color) from counts; RENDER_GRID_OF_OBJECTS by count.
+	•	Induction: detect that y encodes histogram property of x (exact dimensions/colors).
+
+⸻
+
+2) Induction & unification — last mile rules (how to learn the above, receipts-first)
+	•	Auto-anchor discovery (parity/modulo/tiling)
+Try anchors in {global (0,0), bbox corner(s), quadrant origins}. Pick the one giving minimal residual (must be 0) consistently across all train pairs.
+	•	Shape checks for all move/copy/repeat ops
+Always validate that shifted mask(x_template) equals mask(y_target) (exact match), not just centroids.
+	•	Per-color parameterization
+For any operator that can be global/per-color, learn both and intersect (observer=observed). Accept only when one form fits all pairs.
+	•	Mask-driven induction pattern
+For any pair (x,y), set M = (x ≠ y); test candidate op only on M. Accept if x patched by op on M equals y exactly.
+	•	Loose lattice discovery
+If exact tiling fails but residual is only on borders, expand motif by 1 pixel in each direction (edge case) and retry; must still land at residual=0.
+
+⸻
+
+3) Composer (beam) — final knobs & guards
+	•	Prune rule: if any train residual increases, drop the branch (inside must settle).
+	•	Monotone and useful: require strict total residual decrease unless the step enables a later exact fit (optional: allow equal residual only if the step reduces bill or simplifies masks; log why).
+	•	Depth/width: default depth≤6–7, beam≤120–160; backoff per task if not solved.
+	•	Caching: memoize residual vectors per (partial program, train id) to avoid recompute.
+	•	Short-program bias: Occam tie-breaker: prefer fewer ops; then lower total edit bill; then lexicographic tie-break of outputs.
+
+⸻
+
+4) Disambiguation & tie-breaking (ARC quirks handled cleanly)
+	•	Multiple valid outputs (rare): choose the program with shortest length, then lowest bill, then lexicographically minimal prediction grid. Document tie reason in receipts.
+	•	Shape mismatch (train/test): permit legit shape transforms (crop/tile/parity) discovered on train; verify train equals exactly; apply to test.
+	•	Ambiguous trains: if two train pairs force contradictory parameters (e.g., two different Δ-sets), print contradiction receipts (minimal edit bills) and search alternative operator family; never guess.
+
+⸻
+
+5) Receipts & PCE — make every solution audit-proof
+
+For each solved task:
+	•	Program listing: ops + params in order.
+	•	Train receipts: residual=0 per pair; for each step show residual vector decrease; edit-bill deltas; mask summaries (ASCII OK).
+	•	Test receipts: total/boundary/interior edits; final PCE line (RESULT/WHY/PRICE&TIME/MOVE).
+	•	Failure receipts (unsolved within beam): top-K partials with where they failed (residual vectors), what operator family would close the gap (from mask analysis).
+
+⸻
+
+6) Evaluation & submission — no gaps
+	•	Public ARC predictions: run the finalized CLI to emit predictions.json + logs; zip and submit.
+	•	Dev split: maintain a reproducible dev set (curated + any known-answer public). Target ≥95% exact; if not, triage receipts and add one small inducer per fail pattern.
+	•	Parallel & resource: jobs = half cores; timeout per task (e.g., 60–120s), but stop early on train-residual=0.
+	•	Reproducibility: fix RNG seeds; pin numpy version; write ENV.md.
+	•	Repo hygiene:
+	•	README.md (universe law, receipts discipline, how to run/extend)
+	•	CATALOG.md (operator list, proofs/induction tests)
+	•	RECEIPTS.md (what we log, where to find examples)
+	•	CONTRIBUTING.md (how to add an inducer, review gate = residual-0 tests)
+	•	CI to run unit tests + curated suite on PRs.
+
+⸻
+
+7) Final missing operators (shortlist) and why they matter
+	•	Mask boolean algebra: composes many “paint only here” tasks without bespoke ops.
+	•	Morphology OPEN/CLOSE + OUTLINE: closes noisy outlines, fills hollow rings → frequent.
+	•	MOD_PATTERN(p,q): generalizes parity; catches stripes/dots with arbitrary periods.
+	•	Diagonal repetition (generic): fills the few diagonal-growth tasks left.
+	•	Quadrant-on-mask: “copy this quadrant pattern only onto marked cells” cases.
+	•	Negative-space stencil: tasks where output is “x but with these internal zeros filled/painted”.
+
+Each must include: induction test (y==prog(x) on train), parameter unification across pairs, and exact residual=0.
+
+⸻
+
+8) Speedups (so we don’t time out on full public)
+	•	Memoize residual vectors for partial programs.
+	•	Pre-compute invariants once per pair.
+	•	Batch apply candidate ops over all train pairs in numpy (vectorize).
+	•	Early trap: if any pair fails exact check in an inducer, abort that inducer immediately.
+
+⸻
+
+9) What NOT to do (guardrails)
+	•	Don’t accept approximate fits (no “almost 0” residual on train).
+	•	Don’t let residual increase through a step.
+	•	Don’t accept per-pair parameter drift; one parameterization per task.
+	•	Don’t add big “universal” ops; keep operators small, composable, receipts-clear.
+
+⸻
+
+The one-paragraph close
+
+You’re ~there. To make it indisputable, add the mask Boolean calculus, the complete morphology set, generic modulo/diagonal repetition, and quadrant-on-mask. Tighten the beam prune (no non-monotone steps), keep train residual==0 as the hard gate, and log receipts + PCE per task. With those, your solver has the operator coverage and the discipline to move from 95% to 100% on ARC-AGI—and every solution stays provably correct and auditable end-to-end.
