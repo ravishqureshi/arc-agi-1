@@ -49,6 +49,13 @@
 - `scripts/determinism.sh` — reproducibility (jobs=1 vs jobs=N, byte‑identical check)
 - `scripts/test_integration.py` — small integration tests
 
+**Datasets:**
+- `data/arc-agi_training_challenges.json` — 1000 tasks (use for development/testing)
+- `data/arc-agi_training_solutions.json` — 1000 solutions (ground truth for training)
+- `data/arc-agi_evaluation_challenges.json` — 120 tasks (public evaluation set)
+- `data/arc-agi_evaluation_solutions.json` — 120 solutions (public eval ground truth)
+- `data/arc-agi_test_challenges.json` — test set (no solutions; for final submission)
+
 ---
 
 ## 2) Legacy / Reference (do not edit for submission)
@@ -98,3 +105,17 @@ Keep these as reference only. Do not wire new features here.
     "timing_ms": {"unify": ms, "fixed_point": ms, "total": ms},
     "hashes": {"task_sha": "...", "closure_set_sha": "..."}
   }
+  ```
+
+---
+
+## 5) Parametric Discipline Reference (Where to Look)
+
+**For parametric patterns (exhaustive search, keyword-only params, fail-loud):**
+- `src/arc_solver/closures.py` — see `unify_KEEP_LARGEST` (lines 89-112) and `KEEP_LARGEST_COMPONENT_Closure` (lines 39-86)
+- `src/arc_solver/utils.py` — see `components(g, *, bg: int)` (line 53), `bbox_nonzero(g, *, bg: int)` (line 40)
+- `src/arc_solver/search.py` — see bg extraction pattern (lines 300-310, 322-329)
+
+**B1 is the gold standard** — all new closures follow this pattern.
+
+---

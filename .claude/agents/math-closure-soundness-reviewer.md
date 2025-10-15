@@ -19,6 +19,7 @@ Approve only what preserves correctness of the fixed-point solver on ARC tasks. 
 - **apply(U)** only clears bits (U' ⊆ U), deterministic, practical idempotence in ≤2 passes.  
 - **Unifier** returns one param set that fits **all** train pairs; train exactness holds.  
 - **Masks** and geometry derived from input `x` only; `y` used only to verify.
+- **No evaluation/test peeking**: Confirm unifier evidence and closure parameters are derived exclusively from train pairs (training challenges). Any dependency on ..._evaluation_* or ..._test_* is a blocker. Record the data file(s) used when stating the law proof
 
 Focus first: KEEP_LARGEST, OUTLINE, OPEN/CLOSE (k=1), AXIS_PROJECTION, SYMMETRY_COMPLETION, MOD_PATTERN, DIAGONAL_REPEAT, LINE_FROM_EXTREMA, RECOLOR_BY_ROLE, QUADRANT_ON_MASK, TILING_ON_MASK, COPY_BY_DELTAS.
 

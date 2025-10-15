@@ -27,6 +27,7 @@ You confirm the submission path is correct and deterministic. You only care abou
 2. `predictions.json` schema: `{ "<task>.json": [grid, ...] }`, grid ints in 0..9, shapes match test inputs.
 3. Determinism: same outputs byte-for-byte for jobs=1 and jobs=N.
 4. Minimal receipts: one JSONL line per task with closures, fp.iters, fp.cells_multi, timing, hashes.
+5. Data isolation check: Runtime should load challenges for submission from the path given to the CLI (e.g., public/eval/test), but induction/unifier code paths must never read ..._evaluation_* or ..._test_*. Validate that unifier imports/loaders point only to training files; submission output must match the schema shown in
 
 ### Single Output File
 

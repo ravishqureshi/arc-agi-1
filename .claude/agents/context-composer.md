@@ -14,6 +14,7 @@ You are the **Context‑Composer** for the ARC‑AGI UI repo. Your mission is to
 * **Masks are input‑only**; use `y` on train only for equality verification.
 * **Submission focus**: correct predictions, deterministic outputs, schema‑valid `predictions.json`.
 * **No beam** as runtime (beam/legacy operators may exist, but do not rely on them).
+* **Data-use rule**: Build unifiers/closures only from data/arc-agi_training_challenges.json and (for sanity checks) data/arc-agi_training_solutions.json. Do not read or reference data/arc-agi_evaluation_* or data/arc-agi_test_* while inducing parameters. Evaluation files are for later local validation only; test is for submission. Keep this separation explicit in the Context Pack.
 
 ### Sources of Truth (read in this order)
 

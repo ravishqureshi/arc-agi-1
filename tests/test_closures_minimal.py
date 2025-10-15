@@ -27,7 +27,12 @@ from arc_solver.closure_engine import (
     run_fixed_point,
     verify_closures_on_train
 )
-from arc_solver.closures import KEEP_LARGEST_COMPONENT_Closure, unify_KEEP_LARGEST
+from arc_solver.closures import (
+    KEEP_LARGEST_COMPONENT_Closure,
+    unify_KEEP_LARGEST,
+    OUTLINE_OBJECTS_Closure,
+    unify_OUTLINE_OBJECTS
+)
 
 
 # ==============================================================================
@@ -432,9 +437,14 @@ def test_all_properties_together():
 # Run Tests
 # ==============================================================================
 
-if __name__ == "__main__":
+# ==============================================================================
+# Test Runner
+# ==============================================================================
+
+def run_all_tests():
     # Run all tests
     tests = [
+        # KEEP_LARGEST tests
         ("Monotonicity", test_monotonicity_keep_largest),
         ("Shrinking", test_shrinking_keep_largest),
         ("Idempotence", test_idempotence_keep_largest),
@@ -448,6 +458,13 @@ if __name__ == "__main__":
         ("Edge case (single)", test_edge_case_single_component),
         ("Edge case (equal-size)", test_edge_case_equal_size_components),
         ("Integration (all properties)", test_all_properties_together),
+        # OUTLINE_OBJECTS tests
+        ("OUTLINE: Shrinking", test_shrinking_outline),
+        ("OUTLINE: Idempotence", test_idempotence_outline),
+        ("OUTLINE: Train exactness (single)", test_train_exactness_outline_single),
+        ("OUTLINE: Train exactness (multiple)", test_train_exactness_outline_multiple),
+        ("OUTLINE: Convergence", test_convergence_outline),
+        ("OUTLINE: Scope all", test_outline_scope_all),
     ]
 
     passed = 0
@@ -469,3 +486,194 @@ if __name__ == "__main__":
 
     if failed > 0:
         sys.exit(1)
+
+
+# ==============================================================================
+# OUTLINE_OBJECTS Property Tests
+# ==============================================================================
+
+def test_shrinking_outline():
+    """
+    Test: F(U) ⊆ U for OUTLINE_OBJECTS (closure only removes possibilities).
+    """
+    # Ring object (outline is entire object)
+    x = np.array([
+        [0, 1, 1, 0],
+        [0, 1, 0, 1],
+        [0, 1, 1, 0]
+    ], dtype=int)
+
+    U = init_top(x.shape[0], x.shape[1])
+    U_copy = U.copy()
+
+    closure = OUTLINE_OBJECTS_Closure("test", {"mode": "outer", "scope": "largest", "bg": 0})
+    U_result = closure.apply(U, x)
+
+    # Verify: F(U) ⊆ U
+    assert grid_subset_or_equal(U_result, U_copy), \
+        "Shrinking violated: F(U) should be subset of U"
+
+    # Count bits before/after
+    bits_before = sum(bin(int(U_copy.data[r, c])).count('1')
+                      for r in range(U.H) for c in range(U.W))
+    bits_after = sum(bin(int(U_result.data[r, c])).count('1')
+                     for r in range(U.H) for c in range(U.W))
+
+    assert bits_after <= bits_before, \
+        f"Shrinking violated: bits increased from {bits_before} to {bits_after}"
+
+
+def test_idempotence_outline():
+    """
+    Test: F(F(U)) = F(U) for OUTLINE_OBJECTS (applying twice is same as once).
+    """
+    # Solid blob
+    x = np.array([
+        [0, 0, 0],
+        [0, 2, 2],
+        [0, 2, 2]
+    ], dtype=int)
+
+    U = init_top(x.shape[0], x.shape[1])
+
+    closure = OUTLINE_OBJECTS_Closure("test", {"mode": "outer", "scope": "largest", "bg": 0})
+
+    # Apply once
+    U1 = closure.apply(U, x)
+
+    # Apply twice
+    U2 = closure.apply(U1, x)
+
+    # Verify: F(U) = F(F(U))
+    assert U1 == U2, "Idempotence violated: F(F(U)) != F(U)"
+    assert np.array_equal(U1.data, U2.data), \
+        "Idempotence violated: data arrays differ"
+
+
+def test_train_exactness_outline_single():
+    """
+    Test: OUTLINE_OBJECTS produces exact output on ring object (outline = entire object).
+    """
+    # Ring object (thin components - use scope="all" to capture all)
+    x = np.array([
+        [0, 1, 1, 0],
+        [0, 1, 0, 1],
+        [0, 1, 1, 0]
+    ], dtype=int)
+
+    y = np.array([
+        [0, 1, 1, 0],
+        [0, 1, 0, 1],
+        [0, 1, 1, 0]
+    ], dtype=int)  # Outline is entire object (thin ring)
+
+    # Use scope="all" since the hole makes this multiple components
+    closure = OUTLINE_OBJECTS_Closure("test", {"mode": "outer", "scope": "all", "bg": 0})
+    U, stats = run_fixed_point([closure], x)
+
+    # Check fully determined
+    assert U.is_fully_determined(), \
+        f"Not fully determined: {stats['cells_multi']} cells still multi-valued"
+
+    # Check exact match
+    y_pred = U.to_grid()
+    assert y_pred is not None, "to_grid() returned None"
+    assert np.array_equal(y_pred, y), \
+        f"Predicted output doesn't match expected.\nPred:\n{y_pred}\nExpected:\n{y}"
+
+
+def test_train_exactness_outline_multiple():
+    """
+    Test: Unifier verifies ALL train pairs for OUTLINE_OBJECTS.
+    """
+    # Pair 1: Solid blob 1 (outline clears interior)
+    x1 = np.array([
+        [0, 0, 0, 0],
+        [0, 1, 1, 0],
+        [0, 1, 1, 0],
+        [0, 0, 0, 0]
+    ], dtype=int)
+    y1 = np.array([
+        [0, 0, 0, 0],
+        [0, 1, 1, 0],
+        [0, 1, 1, 0],
+        [0, 0, 0, 0]
+    ], dtype=int)  # All pixels are outline (2x2 blob)
+
+    # Pair 2: Solid blob 2 (larger, interior cleared)
+    x2 = np.array([
+        [0, 0, 0, 0],
+        [0, 2, 2, 2],
+        [0, 2, 2, 2],
+        [0, 2, 2, 2]
+    ], dtype=int)
+    y2 = np.array([
+        [0, 0, 0, 0],
+        [0, 2, 2, 2],
+        [0, 2, 0, 2],
+        [0, 2, 2, 2]
+    ], dtype=int)  # Interior (2,2) cleared
+
+    train = [(x1, y1), (x2, y2)]
+
+    # Unifier should find params that work
+    closures = unify_OUTLINE_OBJECTS(train)
+
+    assert len(closures) >= 1, f"Expected at least 1 closure, got {len(closures)}"
+
+    # Verify each pair manually
+    for x, y in train:
+        U, _ = run_fixed_point(closures, x)
+        y_pred = U.to_grid()
+        assert y_pred is not None, f"Failed to solve train pair"
+        assert np.array_equal(y_pred, y), \
+            f"Train exactness violated.\nInput:\n{x}\nPred:\n{y_pred}\nExpected:\n{y}"
+
+
+def test_convergence_outline():
+    """
+    Test: OUTLINE_OBJECTS converges in ≤2 iterations.
+    """
+    # Two components (all scope)
+    x = np.array([
+        [1, 1, 0, 3, 3],
+        [1, 0, 0, 3, 3]
+    ], dtype=int)
+
+    closure = OUTLINE_OBJECTS_Closure("test", {"mode": "outer", "scope": "all", "bg": 0})
+    U, stats = run_fixed_point([closure], x)
+
+    # Should converge in ≤2 passes
+    assert stats["iters"] <= 2, \
+        f"Expected convergence in ≤2 iterations, got {stats['iters']}"
+
+
+def test_outline_scope_all():
+    """
+    Test: scope="all" outlines all components.
+    """
+    # Two components
+    x = np.array([
+        [1, 1, 0, 3, 3],
+        [1, 0, 0, 3, 3]
+    ], dtype=int)
+    y = np.array([
+        [1, 1, 0, 3, 3],
+        [1, 0, 0, 3, 3]
+    ], dtype=int)  # Both outlined (no interior)
+
+    closure = OUTLINE_OBJECTS_Closure("test", {"mode": "outer", "scope": "all", "bg": 0})
+    U, _ = run_fixed_point([closure], x)
+
+    y_pred = U.to_grid()
+    assert y_pred is not None
+    assert np.array_equal(y_pred, y), \
+        f"scope='all' not working correctly.\nPred:\n{y_pred}\nExpected:\n{y}"
+
+
+# ==============================================================================
+# Main
+# ==============================================================================
+
+if __name__ == "__main__":
+    run_all_tests()

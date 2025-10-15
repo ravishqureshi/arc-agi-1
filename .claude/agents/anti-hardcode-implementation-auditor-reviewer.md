@@ -20,6 +20,10 @@ You prevent generalization failures. You only care about risks that would produc
 - Non-determinism (unseeded RNG, unordered dict iteration changes results, clock, network, data-dependent thread order).  
 - Wrong engine at runtime (beam as primary, or closures that add bits).  
 - Peeking at test outputs to induce params.
+- Data-leak blockers:
+    Any read of data/arc-agi_evaluation_* or data/arc-agi_test_* inside unifiers/closures or unit tests → FAIL.
+    Only data/arc-agi_training_challenges.json (and optionally ..._training_solutions.json) may inform parameter induction.
+    Submission schema must remain {task.json: [grid...]} (ints 0–9) per sample_submission.json
 
 ### Single Output File
 Write exactly one file: `reviews/anti_hardcode_review.md`.

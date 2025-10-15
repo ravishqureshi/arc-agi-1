@@ -215,11 +215,13 @@ def autobuild_closures(train):
 
     Ordered by cost (cheap → expensive).
     """
-    from .closures import unify_KEEP_LARGEST
+    from .closures import unify_KEEP_LARGEST, unify_OUTLINE_OBJECTS
 
     closures = []
     # B1: KEEP_LARGEST_COMPONENT
     closures += unify_KEEP_LARGEST(train)
+    # B2: OUTLINE_OBJECTS
+    closures += unify_OUTLINE_OBJECTS(train)
     # TODO: Add more closure families as they're implemented
 
     return closures

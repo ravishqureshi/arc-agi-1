@@ -58,6 +58,12 @@ docs/CONTEXT_INDEX.md       # ONLY if paths/roles change (update anchors)
 * Returns `[closure]` **only if one param set fits all train pairs** and **train exactness** holds via fixed-point; else `[]`.
 * Masks and geometry derived from **input x** only; use `y` only to verify train equality.
 
+### Data-use guard (training-only induction)
+* Induction must use **training data only**:
+ - Allowed: `data/arc-agi_training_challenges.json` (and optionally `data/arc-agi_training_solutions.json` for local verification).
+ - **Forbidden inside unifiers/closures/tests:** any `data/arc-agi_evaluation_*` or `data/arc-agi_test_*` files.
+* Evaluation/test files may be used **only** by the submission runner (e.g., `scripts/run_public.py`) to produce predictions—never to induce parameters.
+
 ### Registry contract
 
 * Register family in `src/arc_solver/closures/registry.py`:
@@ -161,6 +167,7 @@ If something is ambiguous, use the **Open Questions** section to propose the **s
 * **Registry order correct:** family added in the right place in `ORDER`.
 * **Submission path intact:** `scripts/run_public.py` unchanged; Orchestrator can run solve, determinism, and validator.
 * **Minimal PR:** only **REPORT** and **PATCH.diff**; no extra files.
+* **Data-use isolation:** unifiers/closures read **only** training files; no eval/test reads in induction code or unit tests.
 
 ---
 

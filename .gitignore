@@ -23,3 +23,6 @@ data/
 .idea/
 
 runs/
+context_packs/
+IMPLEMENTATION_REPORT.md
+PATCH.diff
