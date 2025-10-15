@@ -31,7 +31,9 @@ from arc_solver.closures import (
     KEEP_LARGEST_COMPONENT_Closure,
     unify_KEEP_LARGEST,
     OUTLINE_OBJECTS_Closure,
-    unify_OUTLINE_OBJECTS
+    unify_OUTLINE_OBJECTS,
+    OPEN_CLOSE_Closure,
+    unify_OPEN_CLOSE
 )
 
 
@@ -465,6 +467,11 @@ def run_all_tests():
         ("OUTLINE: Train exactness (multiple)", test_train_exactness_outline_multiple),
         ("OUTLINE: Convergence", test_convergence_outline),
         ("OUTLINE: Scope all", test_outline_scope_all),
+        # OPEN_CLOSE tests
+        ("OPEN_CLOSE: Shrinking", test_shrinking_open_close),
+        ("OPEN_CLOSE: Idempotence", test_idempotence_open_close),
+        ("OPEN_CLOSE: OPEN train exactness", test_train_exactness_open),
+        ("OPEN_CLOSE: CLOSE train exactness", test_train_exactness_close),
     ]
 
     passed = 0
@@ -669,6 +676,103 @@ def test_outline_scope_all():
     assert y_pred is not None
     assert np.array_equal(y_pred, y), \
         f"scope='all' not working correctly.\nPred:\n{y_pred}\nExpected:\n{y}"
+
+
+# ==============================================================================
+# OPEN_CLOSE Property Tests
+# ==============================================================================
+
+def test_shrinking_open_close():
+    """Test: apply(U) ⊆ U (closure only removes possibilities)."""
+    x = np.array([
+        [0, 1, 1, 0],
+        [0, 1, 0, 1],
+        [0, 1, 1, 0]
+    ], dtype=int)
+
+    U = init_top(x.shape[0], x.shape[1])
+    U_copy = U.copy()
+
+    closure = OPEN_CLOSE_Closure("test", {"mode": "open", "bg": 0})
+    U_result = closure.apply(U, x)
+
+    assert grid_subset_or_equal(U_result, U_copy), \
+        "Shrinking violated: apply(U) should be subset of U"
+
+
+def test_idempotence_open_close():
+    """Test: ≤2-pass convergence for OPEN_CLOSE."""
+    x = np.array([
+        [0, 1, 0],
+        [1, 1, 1],
+        [0, 1, 0]
+    ], dtype=int)
+
+    closure = OPEN_CLOSE_Closure("test", {"mode": "close", "bg": 0})
+    U, stats = run_fixed_point([closure], x)
+
+    assert stats["iters"] <= 2, \
+        f"Expected ≤2 iterations, got {stats['iters']}"
+
+
+def test_train_exactness_open():
+    """Test: OPEN removes thin structures."""
+    # Input: 2x2 solid block (too thin - will be completely eroded)
+    x = np.array([
+        [0, 0, 0, 0],
+        [0, 1, 1, 0],
+        [0, 1, 1, 0],
+        [0, 0, 0, 0]
+    ], dtype=int)
+
+    # Expected: OPEN on 2x2 block erodes everything (no pixel has all 4 neighbors as fg)
+    # After ERODE: all pixels removed (each has some bg neighbors)
+    # After DILATE: nothing to dilate
+    y = np.array([
+        [0, 0, 0, 0],
+        [0, 0, 0, 0],
+        [0, 0, 0, 0],
+        [0, 0, 0, 0]
+    ], dtype=int)
+
+    closure = OPEN_CLOSE_Closure("test", {"mode": "open", "bg": 0})
+    U, _ = run_fixed_point([closure], x)
+
+    assert U.is_fully_determined()
+    y_pred = U.to_grid()
+    assert np.array_equal(y_pred, y), \
+        f"OPEN test failed.\nInput:\n{x}\nPred:\n{y_pred}\nExpected:\n{y}"
+
+
+def test_train_exactness_close():
+    """Test: CLOSE fills single-pixel gap in larger shape."""
+    # Input: ring with single pixel gap in center
+    x = np.array([
+        [0, 0, 0, 0, 0],
+        [0, 1, 1, 1, 0],
+        [0, 1, 0, 1, 0],
+        [0, 1, 1, 1, 0],
+        [0, 0, 0, 0, 0]
+    ], dtype=int)
+
+    # Expected: Gap filled, edges removed by erosion
+    # DILATE: fills the gap and expands to edges
+    # ERODE: removes edge pixels, keeps filled core
+    y = np.array([
+        [0, 0, 0, 0, 0],
+        [0, 1, 1, 1, 0],
+        [0, 1, 1, 1, 0],
+        [0, 1, 1, 1, 0],
+        [0, 0, 0, 0, 0]
+    ], dtype=int)
+
+    closure = OPEN_CLOSE_Closure("test", {"mode": "close", "bg": 0})
+    U, _ = run_fixed_point([closure], x)
+
+    assert U.is_fully_determined()
+    y_pred = U.to_grid()
+    assert np.array_equal(y_pred, y), \
+        f"CLOSE test failed.\nInput:\n{x}\nPred:\n{y_pred}\nExpected:\n{y}"
 
 
 # ==============================================================================

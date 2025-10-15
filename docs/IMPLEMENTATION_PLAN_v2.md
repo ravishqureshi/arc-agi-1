@@ -296,3 +296,189 @@ If you kept everything in current files, skip. If you folderized closures later,
 * Context index accurately maps where unifiers/closures live so agents can navigate.
 
 ---
+
+### M2 — OPEN/CLOSE + AXIS_PROJECTION + SYMMETRY
+Breakdown for **M2** only. Same style as M1, not over-broken, with exact names, where to add, unifier scope, integration order, tiny tests, and acceptance. No step depends on future milestones.
+
+#### M2.1 — Closure: OPEN/CLOSE (k=1) ✅ COMPLETED
+
+**Law (one-liner)**
+
+* **OPEN** = ERODE₁ then DILATE₁ on foreground objects (4-connected).
+* **CLOSE** = DILATE₁ then ERODE₁ on foreground objects (4-connected).
+  Resulting grid replaces object shapes; closure **narrows** U to those colors at those pixels (intersect-only).
+
+**Files**
+
+* `src/arc_solver/closures.py` (add closure + unifier)
+* `tests/test_closures_minimal.py` (tiny tests)
+
+**Add**
+
+```python
+# closures.py
+class OPEN_CLOSE_Closure(Closure):
+    # name = "OPEN_CLOSE"
+    # params = {"mode": "open" | "close", "bg": int}
+    # apply(self, U): compute morph(x_input, mode, k=1), intersect-only
+
+def unify_OPEN_CLOSE(train) -> list[Closure]:
+    # candidates: mode in {"open","close"}, bg in 0..9 (or inferred)
+    # build closure for each candidate; accept iff exact on all train pairs
+```
+
+**apply(U) — algorithm**
+
+* From `x_input` and `bg`, build binary masks per color or single FG mask (choose simplest that matches train).
+* Compute morph result `y*` with k=1 using 4-neighbor structuring element.
+* Build per-cell bitmasks from `y*` (one-hot allowed color at each pixel); return `U & mask` (intersect only).
+* Deterministic; ≤2-pass idempotent in practice.
+
+**Unifier**
+
+* Enumerate `mode ∈ {"open","close"}` and `bg ∈ {0..9}` (or infer).
+* For each candidate, verify **train exactness** on all pairs via fixed-point; return `[candidate]` or `[]`.
+
+**Integration**
+
+* In `src/arc_solver/search.py::autobuild_closures(train)` add after OUTLINE:
+  `closures += unify_OPEN_CLOSE(train)`.
+
+**Tiny tests**
+
+* Shrinking: `apply(U) ⊆ U`.
+* Idempotence ≤2 passes.
+* Train exactness minis:
+
+  * OPEN removes single-pixel spurs;
+  * CLOSE fills single-pixel gaps in a ring.
+
+**Acceptance**
+
+* Train exactness holds where law applies; LFP singles on minis.
+
+---
+
+#### M2.2 — Closure: AXIS_PROJECTION_FILL
+
+**Law (one-liner)**
+From each object pixel, **extend along row or column to border** (no obstacles in M2), painting the object color along the ray(s). Scope can be `largest` or `all`.
+
+**Files**
+
+* `src/arc_solver/closures.py` (add closure + unifier)
+* `tests/test_closures_minimal.py`
+
+**Add**
+
+```python
+class AXIS_PROJECTION_Closure(Closure):
+    # name = "AXIS_PROJECTION"
+    # params = {"axis": "row" | "col", "scope": "largest|all", "mode": "to_border", "bg": int}
+    # apply(self, U): derive projection mask from x_input; intersect-only
+
+def unify_AXIS_PROJECTION(train) -> list[Closure]:
+    # axis in {"row","col"}, scope in {"largest","all"}, mode fixed "to_border", bg inferred or in 0..9
+    # accept candidate iff exact on all train pairs
+```
+
+**apply(U) — algorithm**
+
+* From `x_input`, choose objects per `scope`; for each object pixel, paint rays along `axis` to image border; combine into a projection mask per color.
+* Build per-cell allowed set from projection result; return `U & mask`.
+
+**Unifier**
+
+* Enumerate `(axis, scope, bg)`; choose the one that gives **train exactness** on all pairs; else `[]`.
+
+**Integration**
+
+* In `autobuild_closures(train)` add after OPEN/CLOSE:
+  `closures += unify_AXIS_PROJECTION(train)`.
+
+**Tiny tests**
+
+* A vertical bar: row projection fills entire rows.
+* A dot: col projection fills a column; largest vs all variants.
+
+**Acceptance**
+
+* Train exactness minis pass; shrinking & ≤2-pass idempotence hold.
+
+---
+
+#### M2.3 — Closure: SYMMETRY_COMPLETION
+
+**Law (one-liner)**
+Reflect content across an axis (v | h | main-diag | anti-diag) and **union** with original; result narrows U to the union colors at reflected pairs.
+
+**Files**
+
+* `src/arc_solver/closures.py` (add closure + unifier)
+* `tests/test_closures_minimal.py`
+
+**Add**
+
+```python
+class SYMMETRY_COMPLETION_Closure(Closure):
+    # name = "SYMMETRY_COMPLETION"
+    # params = {"axis": "v|h|diag|anti", "scope": "global|largest|per_object"}
+    # apply(self, U): reflect x_input by axis/scope, union with x_input; intersect-only
+
+def unify_SYMMETRY_COMPLETION(train) -> list[Closure]:
+    # axis in {"v","h","diag","anti"}, scope in {"global","largest","per_object"}
+    # accept iff exact on all train pairs
+```
+
+**apply(U) — algorithm**
+
+* Compute `R(x_input)` by reflecting across `axis` with `scope`; union `x_input ∪ R(x_input)` to obtain `y*`.
+* Intersect U with one-hot masks from `y*`.
+
+**Unifier**
+
+* Enumerate `(axis, scope)`; accept the single candidate that yields **train exactness** on every pair; else `[]`.
+
+**Integration**
+
+* In `autobuild_closures(train)` add after AXIS_PROJECTION:
+  `closures += unify_SYMMETRY_COMPLETION(train)`.
+
+**Tiny tests**
+
+* Half-shape mirrored vertically to complete a full object (global).
+* Largest-only reflection leaves small noise untouched.
+
+**Acceptance**
+
+* Minis converge to singletons; train exactness holds.
+
+---
+
+#### M2.4 — Registration & Smoke
+
+**What**
+Ensure the three unifiers are in order and solve path runs.
+
+**Files**
+
+* `src/arc_solver/search.py`
+
+**Do**
+
+```python
+def autobuild_closures(train):
+    closures = []
+    closures += unify_KEEP_LARGEST(train)          # M1
+    closures += unify_OUTLINE_OBJECTS(train)       # M1
+    closures += unify_OPEN_CLOSE(train)            # M2.1
+    closures += unify_AXIS_PROJECTION(train)       # M2.2
+    closures += unify_SYMMETRY_COMPLETION(train)   # M2.3
+    return closures
+```
+
+**Acceptance**
+
+* `solve_with_closures` returns closures when any unifier fits; runs without touching beam.
+
+---

@@ -242,3 +242,172 @@ def unify_OUTLINE_OBJECTS(train: List[Tuple[Grid, Grid]]) -> List[Closure]:
                 valid_closures.append(candidate)
 
     return valid_closures
+
+
+# ==============================================================================
+# Morphology Helpers (k=1, 4-connected)
+# ==============================================================================
+
+def erode_k1_4conn(mask: np.ndarray) -> np.ndarray:
+    """
+    Erode binary mask by k=1 with 4-connected structuring element.
+
+    For each pixel: keep True only if all 4-neighbors are also True.
+    Out-of-bounds treated as background (False).
+    """
+    H, W = mask.shape
+    result = np.zeros_like(mask, dtype=bool)
+
+    for r in range(H):
+        for c in range(W):
+            if not mask[r, c]:
+                continue
+
+            # Check all 4-neighbors (up, down, left, right)
+            keep = True
+            for dr, dc in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+                nr, nc = r + dr, c + dc
+                # Out-of-bounds treated as background
+                if not (0 <= nr < H and 0 <= nc < W):
+                    keep = False
+                    break
+                if not mask[nr, nc]:
+                    keep = False
+                    break
+
+            result[r, c] = keep
+
+    return result
+
+
+def dilate_k1_4conn(mask: np.ndarray) -> np.ndarray:
+    """
+    Dilate binary mask by k=1 with 4-connected structuring element.
+
+    For each pixel: set True if any 4-neighbor is True.
+    """
+    H, W = mask.shape
+    result = mask.copy()
+
+    for r in range(H):
+        for c in range(W):
+            if mask[r, c]:
+                # Spread to all 4-neighbors
+                for dr, dc in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+                    nr, nc = r + dr, c + dc
+                    if 0 <= nr < H and 0 <= nc < W:
+                        result[nr, nc] = True
+
+    return result
+
+
+# ==============================================================================
+# M2.1: OPEN_CLOSE
+# ==============================================================================
+
+class OPEN_CLOSE_Closure(Closure):
+    """
+    Morphological opening/closing (k=1, 4-connected).
+
+    params = {"mode": "open" | "close", "bg": int}
+
+    Laws:
+    - OPEN = ERODE then DILATE (removes small protrusions)
+    - CLOSE = DILATE then ERODE (fills small gaps)
+    """
+
+    def apply(self, U: SetValuedGrid, x_input: Grid) -> SetValuedGrid:
+        # Fail loudly if required params not provided
+        mode = self.params["mode"]
+        bg = self.params["bg"]
+
+        if mode not in ["open", "close"]:
+            raise ValueError(f"Invalid mode: {mode}. Expected 'open' or 'close'.")
+
+        # Build binary foreground mask
+        fg_mask = (x_input != bg)
+
+        # Compute morphological operation
+        if mode == "open":
+            # OPEN = ERODE then DILATE
+            eroded = erode_k1_4conn(fg_mask)
+            y_star = dilate_k1_4conn(eroded)
+        else:  # mode == "close"
+            # CLOSE = DILATE then ERODE
+            dilated = dilate_k1_4conn(fg_mask)
+            y_star = erode_k1_4conn(dilated)
+
+        # Build per-cell allowed set from y_star
+        U_new = U.copy()
+        bg_mask = color_to_mask(bg)
+
+        for r in range(U.H):
+            for c in range(U.W):
+                if y_star[r, c]:
+                    # Foreground pixel in morphology result
+                    if x_input[r, c] != bg:
+                        # Already foreground in input: keep input color
+                        obj_color = int(x_input[r, c])
+                        obj_mask = color_to_mask(obj_color)
+                        U_new.intersect(r, c, obj_mask)
+                    else:
+                        # Background in input but foreground in morphology: infer color from neighbors
+                        # Find nearest foreground neighbor color
+                        neighbor_color = None
+                        for dr, dc in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+                            nr, nc = r + dr, c + dc
+                            if 0 <= nr < x_input.shape[0] and 0 <= nc < x_input.shape[1]:
+                                if x_input[nr, nc] != bg:
+                                    neighbor_color = int(x_input[nr, nc])
+                                    break
+                        # Fail loudly if color cannot be inferred
+                        if neighbor_color is None:
+                            raise ValueError(
+                                f"OPEN_CLOSE: Cannot infer color for morphology result at ({r}, {c}). "
+                                f"Pixel is foreground in morphology but has no foreground neighbors. "
+                                f"This indicates malformed input or incorrect bg parameter."
+                            )
+                        obj_mask = color_to_mask(neighbor_color)
+                        U_new.intersect(r, c, obj_mask)
+                else:
+                    # Background pixel: force to {bg}
+                    U_new.intersect(r, c, bg_mask)
+
+        return U_new
+
+
+def unify_OPEN_CLOSE(train: List[Tuple[Grid, Grid]]) -> List[Closure]:
+    """
+    Unifier for OPEN_CLOSE.
+
+    Enumerates:
+    - mode ∈ {"open", "close"}
+    - bg ∈ {0..9}
+
+    For each candidate:
+    - Build closure
+    - Call verify_closures_on_train([candidate], train)
+    - If exact on all pairs, collect candidate
+
+    Returns:
+        List of OPEN_CLOSE closures (usually 0 or 1)
+        Empty list if no params work
+    """
+    from .closure_engine import verify_closures_on_train
+
+    valid_closures = []
+
+    # Enumerate parameters
+    modes = ["open", "close"]
+    bgs = range(10)
+
+    for mode in modes:
+        for bg in bgs:
+            candidate = OPEN_CLOSE_Closure(
+                f"OPEN_CLOSE[mode={mode},bg={bg}]",
+                {"mode": mode, "bg": bg}
+            )
+            if verify_closures_on_train([candidate], train):
+                valid_closures.append(candidate)
+
+    return valid_closures
