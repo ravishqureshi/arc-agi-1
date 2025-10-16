@@ -68,7 +68,9 @@ def run_public(dataset_path: str, output_dir: str, verbose: bool = True):
         closures, preds, test_residuals, metadata = solve_with_closures(inst)
 
         # Determine status
-        if closures is not None:
+        # NEW: Check if predictions were generated (not just if closures exist)
+        # Meta-only closures (e.g., CANVAS_SIZE alone) return closures but no preds
+        if closures is not None and len(preds) > 0:
             status = "solved"
             solved_count += 1
         else:

@@ -60,8 +60,16 @@ class INPUT_IDENTITY_Closure(Closure):
 
     def apply(self, U: SetValuedGrid, x_input: Grid) -> SetValuedGrid:
         U_new = U.copy()
+
+        # CANVAS-AWARE: Only process cells within x_input bounds
+        H_in, W_in = x_input.shape
+
         for r in range(U.H):
             for c in range(U.W):
+                # Skip cells outside x_input bounds (leave unchanged in U)
+                if r >= H_in or c >= W_in:
+                    continue
+
                 input_color = int(x_input[r, c])
                 input_mask = color_to_mask(input_color)
                 U_new.intersect(r, c, input_mask)
@@ -107,8 +115,15 @@ class KEEP_LARGEST_COMPONENT_Closure(Closure):
         U_new = U.copy()
         bg_mask = color_to_mask(bg)
 
+        # CANVAS-AWARE: Only process cells within x_input bounds
+        H_in, W_in = x_input.shape
+
         for r in range(U.H):
             for c in range(U.W):
+                # Skip cells outside x_input bounds (leave unchanged in U)
+                if r >= H_in or c >= W_in:
+                    continue
+
                 if (r, c) not in largest_pixels:
                     # Not in largest → must be background
                     U_new.intersect(r, c, bg_mask)
@@ -234,8 +249,15 @@ class OUTLINE_OBJECTS_Closure(Closure):
         U_new = U.copy()
         bg_mask = color_to_mask(bg)
 
+        # CANVAS-AWARE: Only process cells within x_input bounds
+        H_in, W_in = x_input.shape
+
         for r in range(U.H):
             for c in range(U.W):
+                # Skip cells outside x_input bounds (leave unchanged in U)
+                if r >= H_in or c >= W_in:
+                    continue
+
                 if (r, c) in outline_pixels:
                     # Outline pixel: keep object color
                     obj_color = color_map[(r, c)]
@@ -396,8 +418,15 @@ class OPEN_CLOSE_Closure(Closure):
         U_new = U.copy()
         bg_mask = color_to_mask(bg)
 
+        # CANVAS-AWARE: Only process cells within x_input bounds
+        H_in, W_in = x_input.shape
+
         for r in range(U.H):
             for c in range(U.W):
+                # Skip cells outside x_input bounds (leave unchanged in U)
+                if r >= H_in or c >= W_in:
+                    continue
+
                 if y_star[r, c]:
                     # Foreground pixel in morphology result
                     if x_input[r, c] != bg:
@@ -543,6 +572,8 @@ class AXIS_PROJECTION_Closure(Closure):
         U_new = U.copy()
         bg_mask = color_to_mask(bg)
 
+        # CANVAS-AWARE: Process all cells (projection extends beyond input)
+        # But check projected_pixels which are computed from x_input
         for r in range(U.H):
             for c in range(U.W):
                 if (r, c) in projected_pixels:
@@ -654,8 +685,15 @@ class SYMMETRY_COMPLETION_Closure(Closure):
         U_new = U.copy()
         bg_mask = color_to_mask(bg)
 
+        # CANVAS-AWARE: Only process cells within y_star (x_input) bounds
+        H_in, W_in = y_star.shape
+
         for r in range(U.H):
             for c in range(U.W):
+                # Skip cells outside y_star bounds (leave unchanged in U)
+                if r >= H_in or c >= W_in:
+                    continue
+
                 color_at_rc = int(y_star[r, c])
                 allowed_mask = color_to_mask(color_at_rc)
                 U_new.intersect(r, c, allowed_mask)
@@ -890,11 +928,16 @@ class MOD_PATTERN_Closure(Closure):
         ar, ac = self.params["anchor"]
         class_map = self.params["class_map"]
 
-        H, W = x_input.shape
+        H_in, W_in = x_input.shape
         U_new = U.copy()
 
-        for r in range(H):
-            for c in range(W):
+        # CANVAS-AWARE: Loop through U dimensions, check x_input bounds
+        for r in range(U.H):
+            for c in range(U.W):
+                # Skip cells outside x_input bounds (leave unchanged in U)
+                if r >= H_in or c >= W_in:
+                    continue  # MOD_PATTERN operates on x_input grid only
+
                 # Compute congruence class
                 i = (r - ar) % p
                 j = (c - ac) % q
@@ -1067,8 +1110,15 @@ class COLOR_PERM_Closure(Closure):
         perm = self.params["perm"]
         U_new = U.copy()
 
+        # CANVAS-AWARE: Only process cells within x_input bounds
+        H_in, W_in = x_input.shape
+
         for r in range(U.H):
             for c in range(U.W):
+                # Skip cells outside x_input bounds (leave unchanged in U)
+                if r >= H_in or c >= W_in:
+                    continue
+
                 x_color = int(x_input[r, c])
                 if x_color in perm:
                     target = perm[x_color]
@@ -1189,9 +1239,15 @@ class RECOLOR_ON_MASK_Closure(Closure):
         U_new = U.copy()
         target_mask = color_to_mask(target_color)
 
-        H, W = x_input.shape
-        for r in range(H):
-            for c in range(W):
+        # CANVAS-AWARE: Only process cells within x_input/T bounds
+        H_in, W_in = x_input.shape
+
+        for r in range(U.H):
+            for c in range(U.W):
+                # Skip cells outside x_input bounds (leave unchanged in U)
+                if r >= H_in or c >= W_in:
+                    continue
+
                 if T[r, c]:
                     U_new.intersect(r, c, target_mask)
 
@@ -1402,3 +1458,83 @@ def unify_RECOLOR_ON_MASK(train: List[Tuple[Grid, Grid]]) -> List[Closure]:
                     valid.append(candidate)
 
     return valid
+
+
+# ==============================================================================
+# CANVAS-AWARE: CANVAS_SIZE
+# ==============================================================================
+
+class CANVAS_SIZE_Closure(Closure):
+    """
+    Canvas size inference closure (metadata-only, no-op on apply).
+
+    params = {
+        "strategy": str,    # "TILE_MULTIPLE" (only strategy)
+        "k_h": int,         # row multiplier for TILE_MULTIPLE
+        "k_w": int          # col multiplier for TILE_MULTIPLE
+    }
+
+    Law: All train outputs satisfy H_out = k_h * H_in, W_out = k_w * W_in
+         where k_h and k_w are constant across all train pairs.
+    """
+
+    def __init__(self, name: str, params: Dict):
+        super().__init__(name, params, is_meta=True)
+
+    def apply(self, U: SetValuedGrid, x_input: Grid) -> SetValuedGrid:
+        """
+        Identity/no-op - this closure only carries metadata for the engine.
+
+        Returns U unchanged (trivially monotone, shrinking, idempotent).
+        """
+        return U
+
+
+def unify_CANVAS_SIZE(train: List[Tuple[Grid, Grid]]) -> List[Closure]:
+    """
+    Unifier for CANVAS_SIZE (infer output shape from train pairs).
+
+    Strategy: TILE_MULTIPLE only
+    - H_out = k_h * H_in, W_out = k_w * W_in (constant k_h, k_w across all train pairs)
+    - Stores only multipliers (k_h, k_w) - parametric and generalizable
+    - Same-shape tasks are handled by k_h=k_w=1
+
+    Returns:
+        List with 0 or 1 CANVAS_SIZE closure
+        Empty list if TILE_MULTIPLE doesn't fit or gates fail
+    """
+    from .closure_engine import preserves_y, compatible_to_y
+
+    if not train:
+        return []
+
+    # TILE_MULTIPLE: H_out = k_h * H_in, W_out = k_w * W_in
+    # Check if all pairs satisfy constant multiplier
+    multipliers = []
+    for x, y in train:
+        H_in, W_in = x.shape
+        H_out, W_out = y.shape
+        if H_in == 0 or W_in == 0:
+            multipliers.append(None)
+            continue
+        # Check if H_out is integer multiple of H_in
+        if H_out % H_in == 0 and W_out % W_in == 0:
+            k_h = H_out // H_in
+            k_w = W_out // W_in
+            multipliers.append((k_h, k_w))
+        else:
+            multipliers.append(None)
+
+    # Check if all pairs have same non-None multiplier
+    if all(m is not None for m in multipliers) and len(set(multipliers)) == 1:
+        k_h, k_w = multipliers[0]
+        # H, W are computed per-input by _compute_canvas (closure_engine.py)
+        candidate = CANVAS_SIZE_Closure(
+            f"CANVAS_SIZE[strategy=TILE_MULTIPLE,k_h={k_h},k_w={k_w}]",
+            {"strategy": "TILE_MULTIPLE", "k_h": k_h, "k_w": k_w}
+        )
+        if preserves_y(candidate, train) and compatible_to_y(candidate, train):
+            return [candidate]
+
+    # No strategy fits
+    return []

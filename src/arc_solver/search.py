@@ -221,6 +221,7 @@ def autobuild_closures(train):
     Ordered by cost (cheap → expensive).
     """
     from .closures import (
+        unify_CANVAS_SIZE,
         unify_COLOR_PERM,
         unify_KEEP_LARGEST,
         unify_RECOLOR_ON_MASK,
@@ -230,7 +231,13 @@ def autobuild_closures(train):
         unify_SYMMETRY_COMPLETION,
         unify_MOD_PATTERN
     )
-    from .closure_engine import verify_closures_on_train
+    from .closure_engine import verify_closures_on_train, verify_consistent_on_train
+
+    # CANVAS-AWARE: Extract canvas closure separately (metadata-only, exempt from back-off)
+    canvas_closure = None
+    canvas_candidates = unify_CANVAS_SIZE(train)
+    if canvas_candidates:
+        canvas_closure = canvas_candidates[0]  # At most one CANVAS_SIZE closure
 
     # Collect all candidates that pass individual composition-safe gates
     candidates = []
@@ -251,14 +258,35 @@ def autobuild_closures(train):
     # M3.1: MOD_PATTERN
     candidates += unify_MOD_PATTERN(train)
 
-    # Greedy composition verification with back-off
-    kept = []
-    for c in candidates:
-        kept.append(c)
-        if not verify_closures_on_train(kept, train):
-            kept.pop()  # Back off: drop last candidate
+    # NEW: Two-phase greedy composition
+    kept_meta = []
+    kept_nonmeta = []
 
-    return kept
+    # Phase 1: Separate meta and non-meta; verify incrementally with consistency check
+    for c in candidates:
+        if c.is_meta:
+            kept_meta.append(c)
+            continue  # Don't verify meta-only (they're metadata, may be identity)
+
+        # Try adding non-meta closure
+        trial = kept_meta + kept_nonmeta + [c]
+        if verify_consistent_on_train(trial, train):  # Consistency, not full exactness
+            kept_nonmeta.append(c)
+        # else skip c (don't drop meta or prior nonmeta)
+
+    # Phase 2: Final exactness check on combined set
+    final = kept_meta + kept_nonmeta
+    if not verify_closures_on_train(final, train):
+        # Greedy back-off on last non-meta until passes or empty
+        while kept_nonmeta and not verify_closures_on_train(kept_meta + kept_nonmeta, train):
+            kept_nonmeta.pop()
+        final = kept_meta + kept_nonmeta
+
+    # Prepend canvas closure if found (always keep, never drop)
+    if canvas_closure:
+        return [canvas_closure] + final
+    else:
+        return final
 
 
 def solve_with_closures(inst: ARCInstance):
@@ -293,8 +321,15 @@ def solve_with_closures(inst: ARCInstance):
         }
         return None, [], [], metadata
 
+    # CANVAS-AWARE: Extract canvas params from CANVAS_SIZE closure
+    canvas_params = None
+    for closure in closures:
+        if closure.name.startswith("CANVAS_SIZE"):
+            canvas_params = closure.params
+            break
+
     # Verify closures on train
-    from .closure_engine import verify_closures_on_train
+    from .closure_engine import verify_closures_on_train, _compute_canvas
 
     t_fp_start = time.time()
     train_ok = verify_closures_on_train(closures, inst.train)
@@ -304,31 +339,55 @@ def solve_with_closures(inst: ARCInstance):
     fp_iters_list = []
     if train_ok:
         for x, y in inst.train:
-            U_final, fp_stats = run_fixed_point(closures, x)
+            canvas = _compute_canvas(x, canvas_params) if canvas_params else None
+            U_final, fp_stats = run_fixed_point(closures, x, canvas=canvas)
             fp_iters_list.append(fp_stats["iters"])
 
     if not train_ok:
-        # Closures don't solve train exactly
-        metadata = {
-            "fp": {"iters": max(fp_iters_list) if fp_iters_list else 0, "cells_multi": -1},
-            "timing_ms": {
-                "unify": int((t_unify_end - t_unify_start) * 1000),
-                "fp": int((t_fp_end - t_fp_start) * 1000),
-                "total": int((time.time() - t_start) * 1000)
-            },
-            "total_residual": sum(residual(x, y) for x, y in inst.train),
-            "residuals_per_pair": [residual(x, y) for x, y in inst.train],
-            "palette_invariants": {},
-            "component_invariants": {}
-        }
-        return None, [], [], metadata
+        # NEW: Check if we have any closures (even if they don't achieve exactness)
+        # If all closures are meta-only, we still want to record them (for CANVAS_SIZE tracking)
+        has_nonmeta = any(not c.is_meta for c in closures)
+
+        if not has_nonmeta:
+            # Only meta closures (e.g., CANVAS_SIZE alone) - still return them for tracking
+            # Task will be marked "failed" but closures will be recorded in receipts
+            metadata = {
+                "fp": {"iters": 0, "cells_multi": -1},
+                "timing_ms": {
+                    "unify": int((t_unify_end - t_unify_start) * 1000),
+                    "fp": int((t_fp_end - t_fp_start) * 1000),
+                    "total": int((time.time() - t_start) * 1000)
+                },
+                "total_residual": sum(residual(x, y) for x, y in inst.train),
+                "residuals_per_pair": [residual(x, y) for x, y in inst.train],
+                "palette_invariants": {},
+                "component_invariants": {}
+            }
+            # Return closures (not None) but empty preds to indicate failure
+            return closures, [], [], metadata
+        else:
+            # Closures don't solve train exactly (and we have non-meta closures)
+            metadata = {
+                "fp": {"iters": max(fp_iters_list) if fp_iters_list else 0, "cells_multi": -1},
+                "timing_ms": {
+                    "unify": int((t_unify_end - t_unify_start) * 1000),
+                    "fp": int((t_fp_end - t_fp_start) * 1000),
+                    "total": int((time.time() - t_start) * 1000)
+                },
+                "total_residual": sum(residual(x, y) for x, y in inst.train),
+                "residuals_per_pair": [residual(x, y) for x, y in inst.train],
+                "palette_invariants": {},
+                "component_invariants": {}
+            }
+            return None, [], [], metadata
 
     # Predict on test
     preds = []
     test_fp_iters = []
 
     for x_test in inst.test_in:
-        U_final, fp_stats = run_fixed_point(closures, x_test)
+        canvas = _compute_canvas(x_test, canvas_params) if canvas_params else None
+        U_final, fp_stats = run_fixed_point(closures, x_test, canvas=canvas)
         test_fp_iters.append(fp_stats["iters"])
 
         # Extract bg from first closure that defines it

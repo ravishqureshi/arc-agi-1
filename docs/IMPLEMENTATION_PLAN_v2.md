@@ -755,7 +755,7 @@ bash scripts/determinism.sh <FILL_THIS>
 python scripts/submission_validator.py runs/<DATE>/predictions.json
 
 
-**Work Order: NX‑UNSTICK (Mask‑Induction + Color Closures)**
+**Work Order: NX‑UNSTICK (Mask‑Induction + Color Closures)** ✅ COMPLETED
 
 **Goal:** Convert empty closure sets into composable ones and unlock palette‑changing tasks.
 **Scope:** Update inducers (mask‑driven), add `COLOR_PERM`, add `RECOLOR_ON_MASK`, refit parameterization to strategy form where needed.
@@ -807,6 +807,133 @@ python scripts/submission_validator.py runs/<DATE>/predictions.json
 * Coverage increases materially from 6/1000 (expect double‑digit tasks without adding any further families).
 
 
+### Milestone: Canvas-Law + Shape-Aware Gates
+
+Objective:
+Enable shape-changing tasks by (1) inferring the output canvas and (2) removing same-shape guards in unifier gates. Then let closures operate on the **output-shaped** set-valued grid.
+
+Scope:
+1) Add CANVAS_SIZE unifier:
+   - Infer (H_out, W_out) from train pairs (multipliers, periods, or bbox tiling).
+   - Expose `canvas = {"H": H_out, "W": W_out, "mapper": φ}` where φ maps output coords to input coords when needed.
+
+2) Gate fixes (shape-aware):
+   - In `preserves_y(closure, train)`: build singleton(y)-shaped U and check `closure.apply(U, x)` equals U for each pair (no shape equality pre-check).
+   - In `compatible_to_y(...)`: for cells where **y is already fixed** (same-law cells), ensure the candidate doesn’t **remove** that y-color; do not enforce global palette subset. No same-shape guard.
+
+3) Output-shaped fixed point:
+   - In `solve_with_closures`: after CANVAS_SIZE, initialize `U = TOP(H_out, W_out)`.
+   - Pass `canvas` (H_out, W_out, φ) to closures so they can write on the larger grid.
+
+4) Retarget two families to output canvas:
+   - **TILING / TILING_ON_MASK**: write motif over the **output lattice**; use input-only masks if required.
+   - **MOD_PATTERN**: evaluate classes on the output lattice `((r - ar) mod p, (c - ac) mod q)`.
+
+Files to edit:
+- `src/arc_solver/search.py`:
+  - Call `unify_CANVAS_SIZE(train)` first; keep greedy set-level verify.
+- `src/arc_solver/closure_engine.py`:
+  - Remove same-shape early returns in `preserves_y`/`compatible_to_y`; allow y-shaped evaluation.
+  - Add optional `canvas` argument plumbed to closures.
+- `src/arc_solver/closures.py`:
+  - Implement `unify_CANVAS_SIZE` (return a tiny `CanvasClosure` that only sets output shape for the engine).
+  - Update TILING/MOD_PATTERN closures to write on `canvas.H,canvas.W` using `φ` where needed.
+
+Tests:
+- Tiny train minis where output is a 3× expansion of 2×2; MOD(2,3) over output lattice; TILING_ON_MASK on larger canvas.
+- Assert shrinking + ≤2-pass idempotence on the output-shaped U.
+- Verify train exactness with composition; predictions deterministic & schema-valid.
+
+Data-use rule:
+- Induction uses training files only; no eval/test in unifiers or tests.
+
+Reviewers to run:
+- anti-hardcode-implementation-auditor-reviewer
+- math-closure-soundness-reviewer
+- submission-determinism-reviewer
+
+Verify commands:
+```bash
+python scripts/run_public.py --dataset=data/arc-agi_training_challenges.json --output=runs/<DATE>
+bash scripts/determinism.sh data/arc-agi_training_challenges.json
+python scripts/submission_validator.py runs/<DATE>/predictions.json
+
+Acceptance:
+Receipts show most tasks now have ≥1 closure (not []).
+A non-trivial subset of shape-changing training tasks become solvable (e.g., tiling/periodic expansions like 00576224, 007bbfb7).
+Coverage increases beyond 10/1000 on the same run; format unchanged.
+
+# Work-Order
+
+Milestone: Canvas Greedy Verify Fix + Param Normalization
+
+Objective:
+Make CANVAS_SIZE usable in composition and normalize its params, so shape-changing tasks can compose with other closures.
+
+Scope:
+1) Tag meta closures and keep them during greedy add/back-off.
+2) Use **consistency verify** during incremental add; require **full exactness** only at the end.
+3) Normalize CANVAS params to multipliers/mapper (no absolute H,W).
+
+Files to edit:
+- `src/arc_solver/closure_engine.py`
+  - In `class Closure`, add: `is_meta: bool = False`.
+  - In `CANVAS_SIZE_Closure`, set `is_meta = True`.
+  - (No change to apply() logic; it may be identity.)
+- `src/arc_solver/closures.py`
+  - Normalize CANVAS params:
+    - Replace absolute output `(H_out,W_out)` with `{'mode':'tile','kh':int,'kw':int}` or equivalent mapper φ.
+    - Unifier must unify `(kh,kw)` (or φ) across all train pairs.
+- `src/arc_solver/search.py`
+  - Update `autobuild_closures(train)` greedy loop:
+    ```python
+    kept_meta, kept_nonmeta = [], []
+    for c in candidates:
+        if c.is_meta:
+            kept_meta.append(c)
+            continue  # don't verify on meta-only
+        # try adding non-meta
+        trial = kept_meta + kept_nonmeta + [c]
+        if verify_consistent_on_train(trial, train):  # << consistency, not full exactness
+            kept_nonmeta.append(c)
+        # else skip c (do not drop meta or prior nonmeta that were consistent)
+    # After loop: require full exactness on the combined set
+    final = kept_meta + kept_nonmeta
+    if not verify_closures_on_train(final, train):   # full exactness
+        # greedy back-off on last non-meta until passes or empty
+        while kept_nonmeta and not verify_closures_on_train(kept_meta + kept_nonmeta, train):
+            kept_nonmeta.pop()
+        final = kept_meta + kept_nonmeta
+    return final
+    ```
+  - Add `verify_consistent_on_train(closures, train)`:
+    - Apply to singleton(x) per pair, ensure **no contradictions** with y (e.g., do not clear y’s color where x==y; do not write outside mapper bounds). Do **not** require full singletons.
+
+Tests to add/update:
+- A shape-growing mini (2×2 → 6×6) where CANVAS_SIZE + TILING compose; assert:
+  - `kept` contains CANVAS_SIZE even when alone initially.
+  - Incremental verify passes on consistency.
+  - Final verify requires full exactness and passes with the second (constraining) closure.
+- A non-shape mini still passes.
+
+Data-use rule:
+- Training-only induction inside unifiers/closures/tests; no eval/test reads.
+
+Reviewers to run:
+- anti-hardcode-implementation-auditor-reviewer
+- math-closure-soundness-reviewer
+- submission-determinism-reviewer
+
+Verify commands:
+```bash
+python scripts/run_public.py --dataset=data/arc-agi_training_challenges.json --output=runs/<DATE>
+bash scripts/determinism.sh data/arc-agi_training_challenges.json
+python scripts/submission_validator.py runs/<DATE>/predictions.json
+
+Acceptance:
+CANVAS_SIZE remains in closures for tasks needing shape growth (no longer dropped).
+Composition with at least one constraining closure now achieves train exactness on shape-changing minis.
+Coverage does not regress; expect >10/1000 once TILING/MOD over output lattice participate.
 
 #### M3.2 — Closure: DIAGONAL_REPEAT (shift chain along Δ=(dr,dc), k steps)
 
@@ -886,3 +1013,130 @@ def autobuild_closures(train):
 
 ---
 
+### M4 — TILING(_ON_MASK) + COPY_BY_DELTAS (baseline push)
+
+#### M4.1 — Closure: TILING(_ON_MASK) on the **output canvas**
+
+**Law (one-liner)**
+Fill the **output lattice** with a motif `m(h×w)` either globally or **on an input-only mask**; narrow `U` to the motif’s color at the tiled coordinates.
+
+**Files**
+
+* `src/arc_solver/closures.py` (closure + unifier)
+* `tests/test_closures_minimal.py`
+
+**Add**
+
+```python
+class TILING_Closure(Closure):
+    # name = "TILING" or "TILING_ON_MASK"
+    # params = {"motif": np.ndarray[h,w], "mode": "global|mask", "mask_template": Optional[str], "anchor": (ar,ac)}
+    # apply(self, U, x): tile motif across the **output** canvas (use canvas mapper if present);
+    #                    if mode="mask", restrict writes to mask_template(x); intersect-only.
+
+def unify_TILING(train) -> list[Closure]:
+    # 1) Extract candidate motif m from y (validate with x→M residual) but **derive** its colors from x where possible.
+    # 2) Anchors: {(0,0), bbox corners, quadrant origins}; choose a single anchor across pairs.
+    # 3) mode candidates:
+    #    - "global"
+    #    - "mask" with mask_template in {ALL, NONZERO, BACKGROUND, NOT_LARGEST, PARITY, STRIPES}
+    # 4) Composition-safe gate: preserves_y && mask-exact on M (changes only where x≠y), no edits outside M.
+    # 5) Return all candidates that pass; composition decides.
+```
+
+**Notes**
+
+* Operate on **output-sized U** (use canvas φ if defined).
+* Mask templates are **input-only**; y used only to verify.
+
+**Tiny tests**
+
+* Global tiling on 6×6 from a 2×2 motif (anchor (0,0)).
+* Masked tiling: fill only BACKGROUND or NOT_LARGEST.
+
+**Acceptance**
+
+* Shrinking + ≤2-pass idempotence; composition reaches train exactness on minis.
+
+---
+
+#### M4.2 — Closure: COPY_BY_DELTAS (shifted-mask equality)
+
+**Law (one-liner)**
+Copy a **template mask** (object/motif) from input to a set of shifted locations `Δ = {δ₁,…,δ_k}` on the output canvas; intersect `U` with the template’s color at those destinations.
+
+**Files**
+
+* `src/arc_solver/closures.py`
+* `tests/test_closures_minimal.py`
+
+**Add**
+
+```python
+class COPY_BY_DELTAS_Closure(Closure):
+    # name = "COPY_BY_DELTAS"
+    # params = {"template": TemplateSpec, "deltas": List[Tuple[dr,dc]]}
+    # apply(self, U, x): for each δ in deltas, place template colors at shifted coords; intersect-only.
+
+def unify_COPY_BY_DELTAS(train) -> list[Closure]:
+    # 1) For each pair, detect a small template from x (e.g., smallest per-color object or residual-bbox).
+    # 2) For each destination object in y, require exact **shifted-mask equality**:
+    #       shift(template, δ) == target_mask
+    # 3) Intersect Δ-sets across pairs → common Δ
+    # 4) Composition-safe gate: preserves_y && patch-exact on M only; collect candidate if passes.
+```
+
+**Notes**
+
+* Works on **output** canvas; use canvas φ if needed (shape growth).
+* Use **shifted-mask equality** (not centroids).
+
+**Tiny tests**
+
+* Copy a 2×2 block across a grid with Δ={(0,3),(3,0)}.
+* Per-color template variant: copy only red template.
+
+**Acceptance**
+
+* Shrinking + ≤2-pass idempotence; composition attains train exactness on minis.
+
+---
+
+#### M4.3 — Registration & smoke
+
+**Files**
+
+* `src/arc_solver/search.py`
+
+**Do**
+
+```python
+def autobuild_closures(train):
+    kept = []
+    # M1
+    kept += unify_KEEP_LARGEST(train)
+    kept += unify_OUTLINE_OBJECTS(train)
+    # M2
+    kept += unify_OPEN_CLOSE(train)
+    kept += unify_AXIS_PROJECTION(train)
+    kept += unify_SYMMETRY_COMPLETION(train)
+    # M3
+    kept += unify_MOD_PATTERN(train)
+    # M4
+    kept += unify_TILING(train)          # after MOD_PATTERN
+    kept += unify_COPY_BY_DELTAS(train)  # after TILING
+
+    # keep your composition logic: meta kept; incremental = consistency; final = full exactness
+    return greedy_compose_with_verify(kept, train)
+```
+
+**Acceptance**
+
+* Builds candidates for TILING and COPY_BY_DELTAS; composition stays deterministic; receipts unchanged in shape.
+
+---
+
+#### M4.4 — Submission smoke (baseline)
+
+* Run training or evaluation split with your usual commands; ensure determinism, schema OK.
+* Track: tasks with at least one **color closure** and at least one **canvas-aware** closure; solved count should move beyond low double digits.

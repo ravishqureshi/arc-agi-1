@@ -42,8 +42,11 @@ from arc_solver.closures import (
     unify_SYMMETRY_COMPLETION,
     MOD_PATTERN_Closure,
     unify_MOD_PATTERN,
+    CANVAS_SIZE_Closure,
+    unify_CANVAS_SIZE,
     infer_bg_from_border
 )
+from arc_solver.closure_engine import _compute_canvas
 from arc_solver.search import autobuild_closures
 
 
@@ -515,6 +518,14 @@ def run_all_tests():
         ("NX-UNSTICK: RECOLOR_ON_MASK templates", test_recolor_on_mask_templates),
         ("NX-UNSTICK: RECOLOR_ON_MASK strategies", test_recolor_on_mask_strategies),
         ("NX-UNSTICK: RECOLOR_ON_MASK train exact", test_recolor_on_mask_train_exact),
+        # CANVAS-AWARE tests
+        ("CANVAS-AWARE: Same shape (backward compat)", test_canvas_size_same_shape),
+        ("CANVAS-AWARE: Tile multiple (expansion)", test_canvas_size_tile_multiple),
+        ("CANVAS-AWARE: Gates shape-aware", test_gates_shape_aware),
+        # CANVAS GREEDY VERIFY FIX tests
+        ("CANVAS-FIX: Shape-growing meta closure", test_canvas_size_shape_growing),
+        ("CANVAS-FIX: Same-shape regression", test_canvas_size_same_shape_regression),
+        ("CANVAS-FIX: Consistent verify allows TOP", test_verify_consistent_on_train_allows_top),
     ]
 
     passed = 0
@@ -1424,6 +1435,166 @@ def test_recolor_on_mask_train_exact():
     U, _ = run_fixed_point(closures, x)
     y_pred = U.to_grid()
     assert np.array_equal(y_pred, y), "RECOLOR_ON_MASK should produce exact y"
+
+
+# ==============================================================================
+# CANVAS-AWARE tests
+# ==============================================================================
+
+def test_canvas_size_same_shape():
+    """Test: CANVAS_SIZE with SAME strategy (backward compatibility)."""
+    # All train pairs have same output shape
+    x1 = np.array([[1, 2], [3, 4]])
+    y1 = np.array([[5, 6], [7, 8]])
+    x2 = np.array([[9, 0], [1, 2]])
+    y2 = np.array([[3, 4], [5, 6]])
+    train = [(x1, y1), (x2, y2)]
+
+    closures = unify_CANVAS_SIZE(train)
+    assert len(closures) == 1, "Should find CANVAS_SIZE closure"
+
+    canvas_closure = closures[0]
+    assert canvas_closure.params["strategy"] == "SAME", "Should use SAME strategy"
+    assert canvas_closure.params["H"] == 2, "Should have H=2"
+    assert canvas_closure.params["W"] == 2, "Should have W=2"
+
+    # Verify identity behavior
+    U = init_top(2, 2)
+    U_after = canvas_closure.apply(U, x1)
+    assert U == U_after, "CANVAS_SIZE should be identity/no-op"
+
+
+def test_canvas_size_tile_multiple():
+    """Test: CANVAS_SIZE with TILE_MULTIPLE strategy (3x expansion)."""
+    # Input 2x2 -> output 6x6 (3x expansion)
+    x1 = np.array([[1, 2], [3, 4]])
+    y1 = np.zeros((6, 6), dtype=int)
+
+    # Input 3x3 -> output 9x9 (3x expansion)
+    x2 = np.array([[5, 6, 7], [8, 9, 0], [1, 2, 3]])
+    y2 = np.zeros((9, 9), dtype=int)
+
+    train = [(x1, y1), (x2, y2)]
+
+    closures = unify_CANVAS_SIZE(train)
+    assert len(closures) == 1, "Should find CANVAS_SIZE closure"
+
+    canvas_closure = closures[0]
+    assert canvas_closure.params["strategy"] == "TILE_MULTIPLE", "Should use TILE_MULTIPLE strategy"
+    assert canvas_closure.params["k_h"] == 3, "Should have k_h=3"
+    assert canvas_closure.params["k_w"] == 3, "Should have k_w=3"
+
+    # Test canvas computation for different inputs
+    canvas1 = _compute_canvas(x1, canvas_closure.params)
+    assert canvas1["H"] == 6, "Should compute H=6 for 2x2 input"
+    assert canvas1["W"] == 6, "Should compute W=6 for 2x2 input"
+
+    canvas2 = _compute_canvas(x2, canvas_closure.params)
+    assert canvas2["H"] == 9, "Should compute H=9 for 3x3 input"
+    assert canvas2["W"] == 9, "Should compute W=9 for 3x3 input"
+
+    # Verify run_fixed_point initializes to correct size
+    U, _ = run_fixed_point([canvas_closure], x1, canvas=canvas1)
+    assert U.H == 6 and U.W == 6, "Should initialize U to 6x6 for 2x2 input"
+
+
+def test_gates_shape_aware():
+    """Test: Gates work on shape-changing tasks (x.shape != y.shape)."""
+    # Shape-changing task: 2x2 input -> 4x4 output
+    x = np.array([[1, 1], [0, 0]])
+    y = np.array([
+        [1, 1, 0, 0],
+        [1, 1, 0, 0],
+        [0, 0, 0, 0],
+        [0, 0, 0, 0]
+    ])
+    train = [(x, y)]
+
+    # CANVAS_SIZE should not be rejected by gates
+    canvas_closures = unify_CANVAS_SIZE(train)
+    assert len(canvas_closures) == 1, "CANVAS_SIZE should work on shape-changing tasks"
+
+    # preserves_y should not fail due to shape mismatch
+    canvas_closure = canvas_closures[0]
+    assert preserves_y(canvas_closure, train), \
+        "preserves_y should pass for identity closure (shape-aware)"
+
+    # compatible_to_y should not fail due to shape mismatch
+    assert compatible_to_y(canvas_closure, train), \
+        "compatible_to_y should pass for identity closure (shape-aware)"
+
+    # Create a real closure (KEEP_LARGEST) and test gates on shape-changing pair
+    # For this test, we'll use a pair where overlapping region has same colors
+    x2 = np.array([[1, 1], [1, 0]])
+    y2 = np.array([
+        [1, 1, 0],
+        [1, 0, 0],
+        [0, 0, 0]
+    ])
+    train2 = [(x2, y2)]
+
+    keep_largest = KEEP_LARGEST_COMPONENT_Closure("test", {"bg": 0})
+
+    # Gates should work on shape-changing tasks (check overlapping region only)
+    # This should pass because overlapping cells (2x2) match between x and y
+    assert compatible_to_y(keep_largest, train2), \
+        "compatible_to_y should check only overlapping region for shape-changing tasks"
+
+
+# ==============================================================================
+# CANVAS GREEDY VERIFY FIX TESTS
+# ==============================================================================
+
+def test_canvas_size_shape_growing():
+    """CANVAS_SIZE stays in kept_meta for shape-growing tasks."""
+    from arc_solver.closure_engine import verify_consistent_on_train
+
+    # Use two train pairs with different input shapes to force TILE_MULTIPLE
+    # (SAME strategy only matches if all outputs have same shape)
+    x1 = np.array([[1, 2], [3, 4]])
+    y1 = np.full((6, 6), 5)
+    x2 = np.array([[7, 8, 9], [0, 1, 2], [3, 4, 5]])
+    y2 = np.full((9, 9), 5)
+    train = [(x1, y1), (x2, y2)]
+
+    canvas_closures = unify_CANVAS_SIZE(train)
+    assert len(canvas_closures) == 1, "Should get one CANVAS_SIZE closure"
+    canvas = canvas_closures[0]
+    assert canvas.is_meta, "CANVAS_SIZE should be meta closure"
+    assert canvas.params["strategy"] == "TILE_MULTIPLE", "Should detect TILE_MULTIPLE"
+    assert canvas.params["k_h"] == 3 and canvas.params["k_w"] == 3, "Multipliers should be 3"
+    assert "H" not in canvas.params and "W" not in canvas.params, "Should NOT store absolute H, W"
+
+    assert verify_consistent_on_train([canvas], train), "CANVAS_SIZE alone should pass consistency"
+    assert not verify_closures_on_train([canvas], train), "CANVAS_SIZE alone can't achieve exactness"
+
+
+def test_canvas_size_same_shape_regression():
+    """CANVAS_SIZE should still work for same-shape tasks (baseline coverage)."""
+    x1 = np.array([[1, 2, 3], [4, 5, 6], [7, 8, 9]])
+    y1 = np.array([[9, 8, 7], [6, 5, 4], [3, 2, 1]])
+    train = [(x1, y1)]
+
+    canvas_closures = unify_CANVAS_SIZE(train)
+    assert len(canvas_closures) == 1, "Should get one CANVAS_SIZE closure"
+    canvas = canvas_closures[0]
+    assert canvas.params["strategy"] == "SAME", "Should detect SAME strategy"
+    assert canvas.params["H"] == 3 and canvas.params["W"] == 3, "Should store H=3, W=3 for SAME"
+
+
+def test_verify_consistent_on_train_allows_top():
+    """verify_consistent_on_train should return True for closures leaving cells TOP."""
+    from arc_solver.closure_engine import verify_consistent_on_train
+
+    x1 = np.array([[1, 2], [3, 4]])
+    y1 = np.array([[5, 6], [7, 8]])
+    train = [(x1, y1)]
+
+    canvas_closures = unify_CANVAS_SIZE(train)
+    canvas = canvas_closures[0]
+
+    assert verify_consistent_on_train([canvas], train), "Identity closure should pass consistency"
+    assert not verify_closures_on_train([canvas], train), "Identity closure should fail exactness"
 
 
 # ==============================================================================

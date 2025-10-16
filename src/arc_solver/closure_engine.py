@@ -96,7 +96,7 @@ class SetValuedGrid:
         Convert to deterministic grid, breaking ties deterministically.
 
         Args:
-            fallback: 'lowest' (pick lowest color) or 'random' (keyword-only)
+            fallback: 'lowest' (pick lowest color from multi-valued cells). Currently only 'lowest' is implemented.
             bg: Background color to use for empty cells (REQUIRED keyword-only, no default)
 
         Returns:
@@ -182,6 +182,7 @@ class Closure:
     """
     name: str
     params: Dict
+    is_meta: bool = False  # True for metadata-only closures (e.g., CANVAS_SIZE)
 
     def apply(self, U: SetValuedGrid, x_input: Grid) -> SetValuedGrid:
         """
@@ -203,23 +204,30 @@ class Closure:
 
 def run_fixed_point(closures: List[Closure],
                     x_input: Grid,
+                    *,
+                    canvas: Optional[Dict] = None,
                     max_iters: int = DEFAULT_MAX_ITERS) -> Tuple[SetValuedGrid, Dict]:
     """
     Run fixed-point iteration until convergence.
 
+    CANVAS-AWARE: Can now initialize U to output shape (not just input shape).
+
     Args:
         closures: List of closures to apply
         x_input: Input grid
+        canvas: Optional dict with "H" and "W" keys for output shape
+                If None, defaults to x_input.shape (backward compatible)
         max_iters: Maximum iterations
 
     Returns:
         (U_final, stats) where stats = {"iters": N, "cells_multi": M}
     """
-    # NOTE: Assumes output shape = input shape
-    # ARCHITECTURE_DEBT: For crop/pad/tile closures, shape must be parametric
-    # (passed via closure params or inferred from train outputs)
-    # This is correct for B1 (KEEP_LARGEST) which preserves shape.
-    H, W = x_input.shape
+    # CANVAS-AWARE: Use canvas size if provided, else default to input shape
+    if canvas:
+        H, W = canvas["H"], canvas["W"]
+    else:
+        H, W = x_input.shape
+
     U = init_top(H, W)
 
     for iteration in range(max_iters):
@@ -254,6 +262,8 @@ def verify_closures_on_train(closures: List[Closure],
     """
     Verify that closures produce exact output on ALL train pairs.
 
+    CANVAS-AWARE: Extracts canvas from CANVAS_SIZE closure if present.
+
     Args:
         closures: List of closures
         train: List of (input, output) pairs
@@ -261,8 +271,18 @@ def verify_closures_on_train(closures: List[Closure],
     Returns:
         True if all train pairs converge to singleton(expected_output)
     """
+    # CANVAS-AWARE: Extract canvas strategy from CANVAS_SIZE closure
+    canvas_params = None
+    for closure in closures:
+        if closure.name.startswith("CANVAS_SIZE"):
+            canvas_params = closure.params
+            break
+
     for x, y in train:
-        U_final, _ = run_fixed_point(closures, x)
+        # Compute canvas per-input for TILE_MULTIPLE strategy
+        canvas = _compute_canvas(x, canvas_params) if canvas_params else None
+
+        U_final, _ = run_fixed_point(closures, x, canvas=canvas)
 
         # Check if U_final is fully determined
         if not U_final.is_fully_determined():
@@ -276,6 +296,82 @@ def verify_closures_on_train(closures: List[Closure],
     return True
 
 
+def verify_consistent_on_train(closures: List[Closure],
+                                train: List[Tuple[Grid, Grid]]) -> bool:
+    """
+    Verify closures don't create contradictions with train outputs.
+
+    Unlike verify_closures_on_train, this does NOT require U to be fully determined.
+    Only checks:
+    1. No cell is empty (contradiction)
+    2. For cells where x[r,c] == y[r,c], closure doesn't remove y's color
+
+    Args:
+        closures: List of closures to verify
+        train: List of (input, output) pairs
+
+    Returns:
+        True if no contradictions detected (allows TOP cells)
+    """
+    # Extract canvas params if present
+    canvas_params = None
+    for closure in closures:
+        if closure.name.startswith("CANVAS_SIZE"):
+            canvas_params = closure.params
+            break
+
+    for x, y in train:
+        # Compute canvas per-input
+        canvas = _compute_canvas(x, canvas_params) if canvas_params else None
+
+        # Run fixed point
+        U_final, _ = run_fixed_point(closures, x, canvas=canvas)
+
+        # Check for contradictions (not full determination)
+        # CANVAS-AWARE: Iterate over U_final bounds, check only cells that exist in y
+        for r in range(U_final.H):
+            for c in range(U_final.W):
+                # Skip cells outside y bounds (canvas may be larger than y)
+                if r >= y.shape[0] or c >= y.shape[1]:
+                    continue  # Cells outside y are allowed to be multi-valued
+
+                allowed = U_final.get_set(r, c)
+                if len(allowed) == 0:
+                    return False  # Empty cell = contradiction
+
+                # If x and y agree on this cell, y's color must still be allowed
+                if r < x.shape[0] and c < x.shape[1]:
+                    if int(x[r, c]) == int(y[r, c]):
+                        if int(y[r, c]) not in allowed:
+                            return False  # Removed correct color
+
+    return True  # No contradictions (may have TOP cells)
+
+
+def _compute_canvas(x_input: Grid, canvas_params: Dict) -> Dict:
+    """
+    Compute canvas size for a given input based on strategy.
+
+    Args:
+        x_input: Input grid
+        canvas_params: CANVAS_SIZE closure params with "strategy": "TILE_MULTIPLE", "k_h", "k_w"
+
+    Returns:
+        Dict with "H" and "W" keys for output shape
+    """
+    strategy = canvas_params["strategy"]
+
+    if strategy == "TILE_MULTIPLE":
+        # Per-input canvas: H_out = k_h * H_in, W_out = k_w * W_in
+        k_h = canvas_params["k_h"]
+        k_w = canvas_params["k_w"]
+        H_in, W_in = x_input.shape
+        return {"H": k_h * H_in, "W": k_w * W_in}
+    else:
+        # Unknown strategy - fallback to input shape (backward compatible)
+        return {"H": x_input.shape[0], "W": x_input.shape[1]}
+
+
 def preserves_y(closure: Closure, train: List[Tuple[Grid, Grid]]) -> bool:
     """
     Verify closure preserves singleton(y) for all train pairs.
@@ -284,22 +380,33 @@ def preserves_y(closure: Closure, train: List[Tuple[Grid, Grid]]) -> bool:
     doesn't change the output. This ensures the closure won't interfere
     with other closures in the composition.
 
+    CANVAS-AWARE: For shape-changing tasks (x.shape != y.shape), only checks
+    cells in the overlapping region that exist in both x and y. Cells outside
+    x_input bounds are not processed by closures, so they're allowed to differ.
+
     Args:
         closure: Closure to test
         train: List of (input, output) pairs
 
     Returns:
-        True if closure.apply(singleton(y), x) == singleton(y) for all pairs
+        True if closure preserves y's colors in cells that closures can process
     """
     for x, y in train:
-        # BLOCKER FIX: Check shape compatibility first
-        if x.shape != y.shape:
-            return False  # Cannot preserve y if shapes differ
-
+        # Build U_y with y.shape (not x.shape) - CANVAS-AWARE
         U_y = init_from_grid(y)
         U_y_after = closure.apply(U_y, x)
-        if U_y_after != U_y:
-            return False
+
+        # CANVAS-AWARE: Only check cells within x_input bounds
+        # Closures only process cells within x_input shape; cells outside remain unchanged
+        H_check = min(x.shape[0], y.shape[0], U_y_after.H)
+        W_check = min(x.shape[1], y.shape[1], U_y_after.W)
+
+        for r in range(H_check):
+            for c in range(W_check):
+                # Check if this cell's color set was modified
+                if U_y.get_set(r, c) != U_y_after.get_set(r, c):
+                    return False
+
     return True
 
 
@@ -308,15 +415,20 @@ def compatible_to_y(closure: Closure, train: List[Tuple[Grid, Grid]]) -> bool:
     Non-destructive on known-correct pixels.
     For cells where x[r,c] == y[r,c], applying closure to singleton(x) must retain that color.
     Does not enforce global palette subset - final composition checked by verify_closures_on_train.
+
+    CANVAS-AWARE: Now works with shape-changing tasks (x.shape != y.shape).
+    Only checks cells that exist in BOTH x and y (overlapping region).
     """
     for x, y in train:
-        if x.shape != y.shape:
-            return False
         Ux = init_from_grid(x)
         Ux2 = closure.apply(Ux, x)
-        H, W = x.shape
-        for r in range(H):
-            for c in range(W):
+
+        # CANVAS-AWARE: Check only overlapping region
+        H_min = min(x.shape[0], y.shape[0])
+        W_min = min(x.shape[1], y.shape[1])
+
+        for r in range(H_min):
+            for c in range(W_min):
                 if int(x[r,c]) == int(y[r,c]):
                     if int(y[r,c]) not in Ux2.get_set(r, c):
                         return False
