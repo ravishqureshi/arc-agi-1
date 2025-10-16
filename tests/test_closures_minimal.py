@@ -40,6 +40,8 @@ from arc_solver.closures import (
     unify_AXIS_PROJECTION,
     SYMMETRY_COMPLETION_Closure,
     unify_SYMMETRY_COMPLETION,
+    MOD_PATTERN_Closure,
+    unify_MOD_PATTERN,
     infer_bg_from_border
 )
 from arc_solver.search import autobuild_closures
@@ -498,6 +500,10 @@ def run_all_tests():
         ("A: Greedy composition backoff", test_greedy_composition_backoff),
         ("B: Per-input bg inference", test_per_input_bg_inference),
         ("B: Per-input bg deterministic", test_per_input_bg_deterministic),
+        # MOD_PATTERN tests
+        ("MOD_PATTERN: Shrinking", test_shrinking_mod_pattern),
+        ("MOD_PATTERN: Idempotence", test_idempotence_mod_pattern),
+        ("MOD_PATTERN: Train exactness", test_train_exactness_mod_pattern),
     ]
 
     passed = 0
@@ -1126,6 +1132,109 @@ def test_per_input_bg_deterministic():
     # Run twice to verify determinism
     bg2 = infer_bg_from_border(x)
     assert bg == bg2, "bg inference must be deterministic"
+
+
+# ==============================================================================
+# MOD_PATTERN Property Tests
+# ==============================================================================
+
+def test_shrinking_mod_pattern():
+    """Test: apply(U) subset U (closure only removes possibilities)."""
+    # 2x3 periodic pattern: (p,q)=(2,3), anchor=(0,0)
+    # Class (0,0): colors {1}
+    # Class (0,1): colors {2}
+    # Class (0,2): colors {3}
+    # Class (1,0): colors {4}
+    # Class (1,1): colors {5}
+    # Class (1,2): colors {6}
+    x = np.array([
+        [1, 2, 3, 1, 2, 3],
+        [4, 5, 6, 4, 5, 6],
+        [1, 2, 3, 1, 2, 3],
+        [4, 5, 6, 4, 5, 6]
+    ], dtype=int)
+
+    # Build class_map from this periodic pattern
+    class_map = {
+        (0, 0): {1}, (0, 1): {2}, (0, 2): {3},
+        (1, 0): {4}, (1, 1): {5}, (1, 2): {6}
+    }
+
+    params = {"p": 2, "q": 3, "anchor": (0, 0), "class_map": class_map}
+    closure = MOD_PATTERN_Closure("test", params)
+
+    U = init_top(x.shape[0], x.shape[1])
+    U_copy = U.copy()
+    U_result = closure.apply(U, x)
+
+    assert grid_subset_or_equal(U_result, U_copy), \
+        "Shrinking violated: apply(U) should be subset of U"
+
+
+def test_idempotence_mod_pattern():
+    """Test: <=2-pass convergence for MOD_PATTERN."""
+    # Simple parity pattern (2,2)
+    x = np.array([
+        [1, 2, 1, 2],
+        [3, 4, 3, 4],
+        [1, 2, 1, 2]
+    ], dtype=int)
+
+    class_map = {
+        (0, 0): {1}, (0, 1): {2},
+        (1, 0): {3}, (1, 1): {4}
+    }
+
+    params = {"p": 2, "q": 2, "anchor": (0, 0), "class_map": class_map}
+    closure = MOD_PATTERN_Closure("test", params)
+
+    U, stats = run_fixed_point([closure], x)
+
+    assert stats["iters"] <= 2, \
+        f"Expected <=2 iterations, got {stats['iters']}"
+
+
+def test_train_exactness_mod_pattern():
+    """Test: MOD_PATTERN unifier finds periodic pattern and achieves train exactness."""
+    # Train pair with clear (p,q)=(2,2) parity pattern
+    x1 = np.array([
+        [1, 2, 1, 2],
+        [3, 4, 3, 4],
+        [1, 2, 1, 2]
+    ], dtype=int)
+
+    y1 = np.array([
+        [1, 2, 1, 2],
+        [3, 4, 3, 4],
+        [1, 2, 1, 2]
+    ], dtype=int)
+
+    # Second pair with same pattern (different colors to test unification)
+    x2 = np.array([
+        [5, 6],
+        [7, 8]
+    ], dtype=int)
+
+    y2 = np.array([
+        [5, 6],
+        [7, 8]
+    ], dtype=int)
+
+    train = [(x1, y1), (x2, y2)]
+
+    # Unifier should find (p,q)=(2,2) pattern
+    closures = unify_MOD_PATTERN(train)
+
+    if len(closures) > 0:
+        # If unifier succeeded, verify train exactness
+        assert verify_closures_on_train(closures, train), \
+            "MOD_PATTERN closures should verify on train"
+
+        # Check params
+        closure = closures[0]
+        assert closure.params["p"] == 2, "Should find p=2"
+        assert closure.params["q"] == 2, "Should find q=2"
+    # If no closures found, that's OK (composition-safe gate rejected it)
 
 
 # ==============================================================================

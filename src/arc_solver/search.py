@@ -225,7 +225,8 @@ def autobuild_closures(train):
         unify_OUTLINE_OBJECTS,
         unify_OPEN_CLOSE,
         unify_AXIS_PROJECTION,
-        unify_SYMMETRY_COMPLETION
+        unify_SYMMETRY_COMPLETION,
+        unify_MOD_PATTERN
     )
     from .closure_engine import verify_closures_on_train
 
@@ -241,6 +242,8 @@ def autobuild_closures(train):
     candidates += unify_AXIS_PROJECTION(train)
     # M2.3: SYMMETRY_COMPLETION
     candidates += unify_SYMMETRY_COMPLETION(train)
+    # M3.1: MOD_PATTERN
+    candidates += unify_MOD_PATTERN(train)
 
     # Greedy composition verification with back-off
     kept = []

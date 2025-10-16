@@ -834,3 +834,195 @@ def unify_SYMMETRY_COMPLETION(train: List[Tuple[Grid, Grid]]) -> List[Closure]:
                     return [candidate]
 
     return []
+
+
+# ==============================================================================
+# M3.1: MOD_PATTERN
+# ==============================================================================
+
+class MOD_PATTERN_Closure(Closure):
+    """
+    Periodic pattern closure via modulo arithmetic.
+
+    params = {
+        "p": int,              # row period (2-6)
+        "q": int,              # col period (2-6)
+        "anchor": (int, int),  # anchor point (ar, ac)
+        "class_map": Dict[Tuple[int,int], Set[int]]  # (i,j) -> allowed colors
+    }
+
+    Law: For cell (r,c), congruence class is ((r-ar) mod p, (c-ac) mod q).
+         Cell (r,c) may only contain colors in class_map[(i,j)] where i,j are the class indices.
+    """
+
+    def apply(self, U: SetValuedGrid, x_input: Grid) -> SetValuedGrid:
+        """
+        Apply periodic mask constraint (intersect only).
+
+        Algorithm:
+        1. Extract params: p, q, anchor (ar, ac), class_map
+        2. For each cell (r,c):
+           - Compute class indices: i = (r - ar) % p, j = (c - ac) % q
+           - Allowed colors: class_map[(i,j)]
+           - Build mask from allowed colors
+           - Intersect U[r,c] with mask
+        3. Return U_new (deterministic, monotone, shrinking)
+
+        Contract:
+        - Monotone & shrinking: U' = U & mask (only clear bits)
+        - Deterministic: no RNG, no I/O, no wall-clock
+        - <=2-pass idempotent on typical U (class masks are deterministic from params)
+        - Masks derived from params only (not from x_input colors, just grid shape)
+        - Does NOT use y; y only used in unifier for verification
+        """
+        p = self.params["p"]
+        q = self.params["q"]
+        ar, ac = self.params["anchor"]
+        class_map = self.params["class_map"]
+
+        H, W = x_input.shape
+        U_new = U.copy()
+
+        for r in range(H):
+            for c in range(W):
+                # Compute congruence class
+                i = (r - ar) % p
+                j = (c - ac) % q
+
+                # Get allowed colors for this class
+                if (i, j) in class_map:
+                    allowed_colors = class_map[(i, j)]
+                else:
+                    # Fallback: if class not in map, allow all colors (no constraint)
+                    allowed_colors = set(range(10))
+
+                # Build bitmask from allowed colors
+                allowed_mask = set_to_mask(allowed_colors)
+
+                # Intersect (only clear bits)
+                U_new.intersect(r, c, allowed_mask)
+
+        return U_new
+
+
+def unify_MOD_PATTERN(train: List[Tuple[Grid, Grid]]) -> List[Closure]:
+    """
+    Unifier for MOD_PATTERN (composition-safe).
+
+    Algorithm:
+    1. Enumerate candidate anchors:
+       - (0, 0) - grid origin
+       - bbox corners of first train input (4 points)
+       - quadrant origins: (0, W//2), (H//2, 0), (H//2, W//2)
+
+    2. For each anchor, enumerate small periods:
+       - p in range(2, 7)  # row period
+       - q in range(2, 7)  # col period
+
+    3. Build class_map from INPUT only:
+       - For each train pair (x, y):
+         - Compute congruence classes for x
+         - For each class (i,j), collect colors that appear in x at positions with that class
+       - Intersect class color sets across all train pairs (observer = observed)
+
+    4. Composition-safe gates:
+       - Check preserves_y(candidate, train): apply(singleton(y)) == singleton(y)
+       - Check compatible_to_y(candidate, train): apply(singleton(x)) colors subset y colors
+       - If both pass, collect candidate
+
+    5. Return [candidate] if found, else []
+
+    Returns:
+        List of MOD_PATTERN closures (usually 0 or 1)
+        Empty list if no (p,q,anchor) works on ALL train pairs
+    """
+    from .closure_engine import preserves_y, compatible_to_y
+
+    # Step 1: Generate candidate anchors
+    x0, y0 = train[0]
+    H, W = x0.shape
+
+    anchors = {(0, 0)}  # Grid origin
+
+    # Add bbox corners from first train input (non-bg pixels)
+    # Try all possible bg candidates
+    for bg_candidate in range(10):
+        objs = components(x0, bg=bg_candidate)
+        if objs:
+            # Get overall bbox
+            r_min = min(o.bbox[0] for o in objs)
+            c_min = min(o.bbox[1] for o in objs)
+            r_max = max(o.bbox[2] for o in objs)
+            c_max = max(o.bbox[3] for o in objs)
+
+            anchors.add((r_min, c_min))
+            anchors.add((r_min, c_max))
+            anchors.add((r_max, c_min))
+            anchors.add((r_max, c_max))
+
+    # Add quadrant origins
+    anchors.add((0, W // 2))
+    anchors.add((H // 2, 0))
+    anchors.add((H // 2, W // 2))
+
+    # Step 2: Enumerate (p, q) in small range
+    for ar, ac in sorted(anchors):
+        for p in range(2, 7):
+            for q in range(2, 7):
+                # Step 3: Build class_map from INPUT
+                # For each class (i,j), track allowed colors across ALL train pairs
+                class_colors_per_pair = []
+
+                for x, y in train:
+                    H_cur, W_cur = x.shape
+                    class_colors = {}  # (i,j) -> Set[int]
+
+                    for r in range(H_cur):
+                        for c in range(W_cur):
+                            i = (r - ar) % p
+                            j = (c - ac) % q
+
+                            if (i, j) not in class_colors:
+                                class_colors[(i, j)] = set()
+
+                            # Add color from INPUT x
+                            class_colors[(i, j)].add(int(x[r, c]))
+
+                    class_colors_per_pair.append(class_colors)
+
+                # Intersect class color sets across all pairs (unified params)
+                # Start with first pair's class_colors
+                class_map = {}
+                for key in class_colors_per_pair[0]:
+                    class_map[key] = class_colors_per_pair[0][key].copy()
+
+                for pair_colors in class_colors_per_pair[1:]:
+                    # Intersect each class
+                    for (i, j) in list(class_map.keys()):
+                        if (i, j) in pair_colors:
+                            class_map[(i, j)] &= pair_colors[(i, j)]
+                        else:
+                            class_map[(i, j)] = set()  # No overlap
+
+                # Skip if any class has empty allowed colors
+                if any(len(colors) == 0 for colors in class_map.values()):
+                    continue
+
+                # Step 4: Build candidate closure
+                params = {
+                    "p": p,
+                    "q": q,
+                    "anchor": (ar, ac),
+                    "class_map": class_map
+                }
+
+                candidate = MOD_PATTERN_Closure(
+                    f"MOD_PATTERN[p={p},q={q},anchor=({ar},{ac})]",
+                    params
+                )
+
+                # Step 5: Composition-safe gates
+                if preserves_y(candidate, train) and compatible_to_y(candidate, train):
+                    return [candidate]
+
+    return []
