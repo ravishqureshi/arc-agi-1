@@ -1273,9 +1273,13 @@ def unify_TILING(train: List[Tuple[Grid, Grid]]) -> List[Closure]:
         List of TILING closures (0..N candidates)
         Empty list if no params work on ALL train pairs
     """
-    from .closure_engine import preserves_y, compatible_to_y, run_fixed_point, _compute_canvas
+    from .closure_engine import preserves_y, compatible_to_y, _compute_canvas, init_from_grid, init_top
 
     valid = []
+
+    # Step 0: Compute canvas params ONCE at start (not per candidate)
+    canvas_closure = (unify_CANVAS_SIZE(train) or [None])[0]
+    canvas_params_dict = canvas_closure.params if canvas_closure else None
 
     # Step 1: Enumerate anchors
     x0, y0 = train[0]
@@ -1384,39 +1388,61 @@ def unify_TILING(train: List[Tuple[Grid, Grid]]) -> List[Closure]:
                     if not (preserves_y(candidate, train) and compatible_to_y(candidate, train)):
                         continue
 
-                    # Additional check: patch-exact on M
-                    # For efficiency, only check patch-exactness if gates pass
-                    patch_exact = True
+                    # Step 6: Mask-local check (ONE-STEP, no fixed-point iteration)
+                    mask_local_ok = True
                     for x, y in train:
-                        # Compute canvas
-                        canvas_candidates = unify_CANVAS_SIZE(train)
-                        canvas_params = canvas_candidates[0].params if canvas_candidates else None
-                        canvas = _compute_canvas(x, canvas_params) if canvas_params else {"H": y.shape[0], "W": y.shape[1]}
+                        # Compute canvas per-input (deterministic from x)
+                        canvas = _compute_canvas(x, canvas_params_dict) if canvas_params_dict else {"H": y.shape[0], "W": y.shape[1]}
 
-                        # Run fixed-point with CANVAS_SIZE + candidate
-                        closures_to_test = canvas_candidates + [candidate] if canvas_candidates else [candidate]
-                        U_final, _ = run_fixed_point(closures_to_test, x, canvas=canvas)
+                        # Build U_x: init from x, expand to canvas if needed
+                        U_x = init_from_grid(x)
+                        if canvas["H"] != x.shape[0] or canvas["W"] != x.shape[1]:
+                            U_canvas = init_top(canvas["H"], canvas["W"])
+                            # Copy x's singletons into U_canvas
+                            for r in range(min(x.shape[0], canvas["H"])):
+                                for c in range(min(x.shape[1], canvas["W"])):
+                                    U_canvas.set_mask(r, c, U_x.data[r, c])
+                            U_x = U_canvas
 
-                        # Check if fully determined
-                        if not U_final.is_fully_determined():
-                            patch_exact = False
+                        # Apply ONE step only
+                        U1 = candidate.apply(U_x, x)
+
+                        # Check mask-local: M = (x != y) on overlap region
+                        H_check = min(x.shape[0], y.shape[0], U1.H)
+                        W_check = min(x.shape[1], y.shape[1], U1.W)
+
+                        for r in range(H_check):
+                            for c in range(W_check):
+                                x_color = int(x[r, c])
+                                y_color = int(y[r, c])
+
+                                if x_color == y_color:
+                                    # Outside M: U1 must equal {x} (no edits)
+                                    allowed = U1.get_set(r, c)
+                                    if allowed != {x_color}:
+                                        mask_local_ok = False
+                                        break
+                                else:
+                                    # On M: y[r,c] must be in U1.get_set(r,c) and not empty
+                                    allowed = U1.get_set(r, c)
+                                    if len(allowed) == 0 or y_color not in allowed:
+                                        mask_local_ok = False
+                                        break
+
+                            if not mask_local_ok:
+                                break
+
+                        if not mask_local_ok:
                             break
 
-                        y_pred = U_final.to_grid_deterministic(fallback='lowest', bg=0)
-
-                        # Check exact match with y (train exactness)
-                        if not np.array_equal(y_pred, y):
-                            patch_exact = False
-                            break
-
-                    if patch_exact:
+                    if mask_local_ok:
                         valid.append(candidate)
                         # Early exit after finding enough good candidates
                         # (but allow more for complex cases)
                         if len(valid) >= 10:
                             return valid
                 except Exception:
-                    # Skip candidates that fail gates or patch-exact check
+                    # Skip candidates that fail gates or mask-local check
                     continue
 
     return valid
@@ -1470,34 +1496,30 @@ class COLOR_PERM_Closure(Closure):
 
 def unify_COLOR_PERM(train: List[Tuple[Grid, Grid]]) -> List[Closure]:
     """
-    Unifier for COLOR_PERM (composition-safe).
+    Unifier for COLOR_PERM (composition-safe, shape-aware).
 
     Algorithm:
-    1. Check for shape mismatches (skip shape-changing tasks)
-    2. Extract color mappings from all train pairs
-    3. Ensure bijective (no collisions)
-    4. Build candidate closure
-    5. Check preserves_y + compatible_to_y
-    6. Return [candidate] if valid, else []
+    1. Extract color mappings from all train pairs (overlap region only)
+    2. Ensure bijective (no collisions)
+    3. Build candidate closure
+    4. Check preserves_y + compatible_to_y
+    5. Return [candidate] if valid, else []
 
     Returns:
         List with 0 or 1 COLOR_PERM closure
-        Empty list if not bijective or gates fail or shapes don't match
+        Empty list if not bijective or gates fail
     """
     from .closure_engine import preserves_y, compatible_to_y
 
-    # SHAPE GUARD: Skip if any train pair has different shapes
-    for x, y in train:
-        if x.shape != y.shape:
-            return []  # Shape-changing task, skip COLOR_PERM
-
-    # Step 1: Build color mapping from all train pairs
+    # Step 1: Build color mapping from all train pairs (CANVAS-AWARE: overlap region only)
     color_map = {}  # x_color -> y_color
 
     for x, y in train:
-        H, W = x.shape
-        for r in range(H):
-            for c in range(W):
+        H_overlap = min(x.shape[0], y.shape[0])
+        W_overlap = min(x.shape[1], y.shape[1])
+
+        for r in range(H_overlap):
+            for c in range(W_overlap):
                 x_c = int(x[r, c])
                 y_c = int(y[r, c])
 
@@ -1601,6 +1623,9 @@ def _compute_template_mask(x: Grid, template: str, params: dict, bg: int) -> np.
     - NONZERO: mask = (x != bg)
     - BACKGROUND: mask = (x == bg)
     - NOT_LARGEST: mask = (not in largest component)
+    - PARITY: mask = checkerboard pattern from anchor2
+    - STRIPES: mask = repeating stripes along axis
+    - BORDER_RING: mask = k-pixel border ring
 
     Returns:
         Boolean mask (H×W array)
@@ -1627,6 +1652,54 @@ def _compute_template_mask(x: Grid, template: str, params: dict, bg: int) -> np.
         mask = np.ones((H, W), dtype=bool)
         for r, c in largest_pixels:
             mask[r, c] = False
+
+        return mask
+
+    elif template == "PARITY":
+        # Checkerboard pattern from anchor2
+        ar2, ac2 = params.get("anchor2", (0, 0))
+        mask = np.zeros((H, W), dtype=bool)
+        for r in range(H):
+            for c in range(W):
+                # Parity: (r + c) % 2 == (ar2 + ac2) % 2
+                if (r + c) % 2 == (ar2 + ac2) % 2:
+                    mask[r, c] = True
+        return mask
+
+    elif template == "STRIPES":
+        # Repeating stripes along axis
+        axis = params.get("axis", "row")
+        k = params.get("k", 2)
+        mask = np.zeros((H, W), dtype=bool)
+
+        if axis == "row":
+            # Horizontal stripes (vary by row)
+            for r in range(H):
+                if (r // k) % 2 == 0:
+                    mask[r, :] = True
+        elif axis == "col":
+            # Vertical stripes (vary by column)
+            for c in range(W):
+                if (c // k) % 2 == 0:
+                    mask[:, c] = True
+
+        return mask
+
+    elif template == "BORDER_RING":
+        # k-pixel border ring around the grid
+        k = params.get("k", 1)
+        mask = np.zeros((H, W), dtype=bool)
+
+        # Border pixels are those within k pixels from any edge
+        for r in range(H):
+            for c in range(W):
+                # Distance from top edge: r
+                # Distance from bottom edge: H - 1 - r
+                # Distance from left edge: c
+                # Distance from right edge: W - 1 - c
+                dist_to_edge = min(r, H - 1 - r, c, W - 1 - c)
+                if dist_to_edge < k:
+                    mask[r, c] = True
 
         return mask
 
@@ -1672,27 +1745,21 @@ def _compute_target_color(x: Grid, T: np.ndarray, strategy: str, params: dict, b
 
 def unify_RECOLOR_ON_MASK(train: List[Tuple[Grid, Grid]]) -> List[Closure]:
     """
-    Unifier for RECOLOR_ON_MASK (composition-safe).
+    Unifier for RECOLOR_ON_MASK (composition-safe, shape-aware).
 
     Algorithm:
-    1. Check for shape mismatches (skip shape-changing tasks)
-    2. Enumerate templates: NONZERO, BACKGROUND, NOT_LARGEST
-    3. For each template, check if template(x) matches residual mask M=(x!=y)
-    4. If yes, enumerate strategies: CONST(0-9), MODE_ON_MASK
-    5. Check if strategy produces exactly y's colors on M
-    6. Build candidate; check preserves_y + compatible_to_y
-    7. Return list of valid closures
+    1. Enumerate templates: NONZERO, BACKGROUND, NOT_LARGEST, PARITY, STRIPES, BORDER_RING
+    2. For each template, check if template(x) matches residual mask M=(x!=y) on overlap region
+    3. If yes, enumerate strategies: CONST(0-9), MODE_ON_MASK
+    4. Check if strategy produces exactly y's colors on M
+    5. Build candidate; check preserves_y + compatible_to_y
+    6. Return list of valid closures
 
     Returns:
         List of RECOLOR_ON_MASK closures (0..N candidates)
-        Empty list if no template/strategy works or shapes don't match
+        Empty list if no template/strategy works
     """
     from .closure_engine import preserves_y, compatible_to_y
-
-    # SHAPE GUARD: Skip if any train pair has different shapes
-    for x, y in train:
-        if x.shape != y.shape:
-            return []  # Shape-changing task, skip RECOLOR_ON_MASK
 
     valid = []
 
@@ -1702,6 +1769,15 @@ def unify_RECOLOR_ON_MASK(train: List[Tuple[Grid, Grid]]) -> List[Closure]:
         ("BACKGROUND", {}),
         ("NOT_LARGEST", {})
     ]
+    # PARITY with anchor2 variants
+    for ar2, ac2 in [(0, 0), (0, 1), (1, 0), (1, 1)]:
+        templates.append(("PARITY", {"anchor2": (ar2, ac2)}))
+    # STRIPES with axis and k variants
+    for axis in ["row", "col"]:
+        for k in [2, 3]:
+            templates.append(("STRIPES", {"axis": axis, "k": k}))
+    # BORDER_RING(1)
+    templates.append(("BORDER_RING", {"k": 1}))
 
     # Try bg=None first, then explicit bgs
     bg_candidates = [None] + list(range(10))
@@ -1726,11 +1802,17 @@ def unify_RECOLOR_ON_MASK(train: List[Tuple[Grid, Grid]]) -> List[Closure]:
                     template_matches = False
                     break
 
-                # Compute residual mask
-                M = (x != y)
+                # Compute residual mask on overlap region (CANVAS-AWARE)
+                H_overlap = min(x.shape[0], y.shape[0])
+                W_overlap = min(x.shape[1], y.shape[1])
+                M = np.zeros((H_overlap, W_overlap), dtype=bool)
+                for r in range(H_overlap):
+                    for c in range(W_overlap):
+                        M[r, c] = (x[r, c] != y[r, c])
 
-                # Check if template matches residual
-                if not np.array_equal(T, M):
+                # Check if template matches residual on overlap region
+                T_overlap = T[:H_overlap, :W_overlap]
+                if not np.array_equal(T_overlap, M):
                     template_matches = False
                     break
 
@@ -1763,10 +1845,11 @@ def unify_RECOLOR_ON_MASK(train: List[Tuple[Grid, Grid]]) -> List[Closure]:
                         strategy_works = False
                         break
 
-                    # Check if target_color matches y on mask
-                    H, W = x.shape
-                    for r in range(H):
-                        for c in range(W):
+                    # Check if target_color matches y on mask (overlap region)
+                    H_overlap = min(x.shape[0], y.shape[0])
+                    W_overlap = min(x.shape[1], y.shape[1])
+                    for r in range(H_overlap):
+                        for c in range(W_overlap):
                             if T[r, c]:
                                 if int(y[r, c]) != target_color:
                                     strategy_works = False
