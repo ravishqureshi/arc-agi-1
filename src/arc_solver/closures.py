@@ -528,10 +528,10 @@ class AXIS_PROJECTION_Closure(Closure):
 
         if axis not in ["row", "col"]:
             raise ValueError(f"Invalid axis: {axis}. Expected 'row' or 'col'.")
-        if scope not in ["largest", "all"]:
-            raise ValueError(f"Invalid scope: {scope}. Expected 'largest' or 'all'.")
-        if mode != "to_border":
-            raise ValueError(f"Only mode='to_border' is implemented, got '{mode}'")
+        if scope not in ["largest", "all", "per_object"]:
+            raise ValueError(f"Invalid scope: {scope}. Expected 'largest', 'all', or 'per_object'.")
+        if mode not in ["to_border", "to_obstacle"]:
+            raise ValueError(f"Invalid mode: {mode}. Expected 'to_border' or 'to_obstacle'.")
 
         objs = components(x_input, bg=bg)
 
@@ -550,23 +550,66 @@ class AXIS_PROJECTION_Closure(Closure):
             selected_objs = [max(objs, key=lambda o: (o.size, -o.bbox[0], -o.bbox[1]))]
         elif scope == "all":
             selected_objs = objs
+        elif scope == "per_object":
+            # Each object projects independently
+            selected_objs = objs
         else:
             raise ValueError(f"Invalid scope: {scope}")
 
-        # Build projection: for each object pixel, extend along axis to border
+        # Build projection: for each object pixel, extend along axis
         H, W = x_input.shape
         projected_pixels = {}  # (r, c) -> color
 
-        for obj in selected_objs:
-            for r, c in obj.pixels:
-                if axis == "row":
-                    # Paint entire row with object color
-                    for col in range(W):
-                        projected_pixels[(r, col)] = obj.color
-                elif axis == "col":
-                    # Paint entire column with object color
-                    for row in range(H):
-                        projected_pixels[(row, c)] = obj.color
+        if mode == "to_border":
+            # Original mode: extend to image border
+            for obj in selected_objs:
+                for r, c in obj.pixels:
+                    if axis == "row":
+                        # Paint entire row with object color
+                        for col in range(W):
+                            projected_pixels[(r, col)] = obj.color
+                    elif axis == "col":
+                        # Paint entire column with object color
+                        for row in range(H):
+                            projected_pixels[(row, c)] = obj.color
+
+        elif mode == "to_obstacle":
+            # New mode: extend until hitting another object (different non-bg color)
+            for obj in selected_objs:
+                for r, c in obj.pixels:
+                    if axis == "row":
+                        # Extend left and right until obstacle or border
+                        # Left direction
+                        for col in range(c, -1, -1):
+                            pixel_color = int(x_input[r, col])
+                            # Stop if hit another object (not bg and not current obj color)
+                            if pixel_color != bg and pixel_color != obj.color:
+                                break
+                            projected_pixels[(r, col)] = obj.color
+                        # Right direction
+                        for col in range(c + 1, W):
+                            pixel_color = int(x_input[r, col])
+                            # Stop if hit another object (not bg and not current obj color)
+                            if pixel_color != bg and pixel_color != obj.color:
+                                break
+                            projected_pixels[(r, col)] = obj.color
+
+                    elif axis == "col":
+                        # Extend up and down until obstacle or border
+                        # Up direction
+                        for row in range(r, -1, -1):
+                            pixel_color = int(x_input[row, c])
+                            # Stop if hit another object (not bg and not current obj color)
+                            if pixel_color != bg and pixel_color != obj.color:
+                                break
+                            projected_pixels[(row, c)] = obj.color
+                        # Down direction
+                        for row in range(r + 1, H):
+                            pixel_color = int(x_input[row, c])
+                            # Stop if hit another object (not bg and not current obj color)
+                            if pixel_color != bg and pixel_color != obj.color:
+                                break
+                            projected_pixels[(row, c)] = obj.color
 
         # Build masks: projected pixels allow object color, others allow bg only
         U_new = U.copy()
@@ -597,43 +640,121 @@ def unify_AXIS_PROJECTION(train: List[Tuple[Grid, Grid]]) -> List[Closure]:
 
     Enumerates:
     - axis ∈ {"row", "col"}
-    - scope ∈ {"largest", "all"}
-    - mode = "to_border" (fixed)
+    - scope ∈ {"largest", "all", "per_object"}
+    - mode ∈ {"to_border", "to_obstacle"}
     - bg: Try None first, then {0..9}
 
     Returns:
         List of AXIS_PROJECTION closures (0..N candidates)
         Empty list if no params work on ALL train pairs
     """
-    from .closure_engine import preserves_y, compatible_to_y
+    from .closure_engine import preserves_y, compatible_to_y, init_from_grid
 
     valid = []
 
     # Enumerate parameters
     axes = ["row", "col"]
-    scopes = ["largest", "all"]
-    mode = "to_border"  # Fixed for M2.2
+    scopes = ["largest", "all", "per_object"]
+    modes = ["to_border", "to_obstacle"]
 
-    # Try bg=None first for each axis/scope combo
+    # Try bg=None first for each axis/scope/mode combo
     for axis in axes:
         for scope in scopes:
-            candidate_none = AXIS_PROJECTION_Closure(
-                f"AXIS_PROJECTION[axis={axis},scope={scope},mode={mode},bg=None]",
-                {"axis": axis, "scope": scope, "mode": mode, "bg": None}
-            )
-            if preserves_y(candidate_none, train) and compatible_to_y(candidate_none, train):
-                valid.append(candidate_none)
+            for mode in modes:
+                candidate_none = AXIS_PROJECTION_Closure(
+                    f"AXIS_PROJECTION[axis={axis},scope={scope},mode={mode},bg=None]",
+                    {"axis": axis, "scope": scope, "mode": mode, "bg": None}
+                )
+                if preserves_y(candidate_none, train) and compatible_to_y(candidate_none, train):
+                    # Mask-local check (ONE-STEP, no fixed-point iteration)
+                    mask_local_ok = True
+                    for x, y in train:
+                        # Build U_x: init from x
+                        U_x = init_from_grid(x)
+
+                        # Apply ONE step only
+                        U1 = candidate_none.apply(U_x, x)
+
+                        # Check mask-local: M = (x != y) on overlap region
+                        H_check = min(x.shape[0], y.shape[0], U1.H)
+                        W_check = min(x.shape[1], y.shape[1], U1.W)
+
+                        for r in range(H_check):
+                            for c in range(W_check):
+                                x_color = int(x[r, c])
+                                y_color = int(y[r, c])
+
+                                if x_color == y_color:
+                                    # Outside M: U1 must equal {x} (no edits)
+                                    allowed = U1.get_set(r, c)
+                                    if allowed != {x_color}:
+                                        mask_local_ok = False
+                                        break
+                                else:
+                                    # On M: y[r,c] must be in U1.get_set(r,c) and not empty
+                                    allowed = U1.get_set(r, c)
+                                    if len(allowed) == 0 or y_color not in allowed:
+                                        mask_local_ok = False
+                                        break
+
+                            if not mask_local_ok:
+                                break
+
+                        if not mask_local_ok:
+                            break
+
+                    if mask_local_ok:
+                        valid.append(candidate_none)
 
     # Fallback: enumerate explicit bgs
     for axis in axes:
         for scope in scopes:
-            for bg in range(10):
-                candidate = AXIS_PROJECTION_Closure(
-                    f"AXIS_PROJECTION[axis={axis},scope={scope},mode={mode},bg={bg}]",
-                    {"axis": axis, "scope": scope, "mode": mode, "bg": bg}
-                )
-                if preserves_y(candidate, train) and compatible_to_y(candidate, train):
-                    valid.append(candidate)
+            for mode in modes:
+                for bg in range(10):
+                    candidate = AXIS_PROJECTION_Closure(
+                        f"AXIS_PROJECTION[axis={axis},scope={scope},mode={mode},bg={bg}]",
+                        {"axis": axis, "scope": scope, "mode": mode, "bg": bg}
+                    )
+                    if preserves_y(candidate, train) and compatible_to_y(candidate, train):
+                        # Mask-local check (ONE-STEP, no fixed-point iteration)
+                        mask_local_ok = True
+                        for x, y in train:
+                            # Build U_x: init from x
+                            U_x = init_from_grid(x)
+
+                            # Apply ONE step only
+                            U1 = candidate.apply(U_x, x)
+
+                            # Check mask-local: M = (x != y) on overlap region
+                            H_check = min(x.shape[0], y.shape[0], U1.H)
+                            W_check = min(x.shape[1], y.shape[1], U1.W)
+
+                            for r in range(H_check):
+                                for c in range(W_check):
+                                    x_color = int(x[r, c])
+                                    y_color = int(y[r, c])
+
+                                    if x_color == y_color:
+                                        # Outside M: U1 must equal {x} (no edits)
+                                        allowed = U1.get_set(r, c)
+                                        if allowed != {x_color}:
+                                            mask_local_ok = False
+                                            break
+                                    else:
+                                        # On M: y[r,c] must be in U1.get_set(r,c) and not empty
+                                        allowed = U1.get_set(r, c)
+                                        if len(allowed) == 0 or y_color not in allowed:
+                                            mask_local_ok = False
+                                            break
+
+                                if not mask_local_ok:
+                                    break
+
+                            if not mask_local_ok:
+                                break
+
+                        if mask_local_ok:
+                            valid.append(candidate)
 
     return valid
 
@@ -1078,7 +1199,49 @@ def unify_MOD_PATTERN(train: List[Tuple[Grid, Grid]]) -> List[Closure]:
 
                 # Step 5: Composition-safe gates
                 if preserves_y(candidate, train) and compatible_to_y(candidate, train):
-                    valid.append(candidate)
+                    # Step 6: Mask-local check (ONE-STEP, no fixed-point iteration)
+                    mask_local_ok = True
+                    for x, y in train:
+                        # Compute canvas per-input (MOD_PATTERN operates on x_input shape only)
+                        # No canvas needed - operates on input grid only
+                        from .closure_engine import init_from_grid
+
+                        # Build U_x: init from x
+                        U_x = init_from_grid(x)
+
+                        # Apply ONE step only
+                        U1 = candidate.apply(U_x, x)
+
+                        # Check mask-local: M = (x != y) on overlap region
+                        H_check = min(x.shape[0], y.shape[0], U1.H)
+                        W_check = min(x.shape[1], y.shape[1], U1.W)
+
+                        for r in range(H_check):
+                            for c in range(W_check):
+                                x_color = int(x[r, c])
+                                y_color = int(y[r, c])
+
+                                if x_color == y_color:
+                                    # Outside M: U1 must equal {x} (no edits)
+                                    allowed = U1.get_set(r, c)
+                                    if allowed != {x_color}:
+                                        mask_local_ok = False
+                                        break
+                                else:
+                                    # On M: y[r,c] must be in U1.get_set(r,c) and not empty
+                                    allowed = U1.get_set(r, c)
+                                    if len(allowed) == 0 or y_color not in allowed:
+                                        mask_local_ok = False
+                                        break
+
+                            if not mask_local_ok:
+                                break
+
+                        if not mask_local_ok:
+                            break
+
+                    if mask_local_ok:
+                        valid.append(candidate)
 
     return valid
 
