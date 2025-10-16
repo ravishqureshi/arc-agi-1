@@ -2126,32 +2126,378 @@ def unify_CANVAS_SIZE(train: List[Tuple[Grid, Grid]]) -> List[Closure]:
 
 
 # ==============================================================================
-# M4.2: COPY_BY_DELTAS (Stub - to be implemented)
+# M4.2: COPY_BY_DELTAS
 # ==============================================================================
 
 class COPY_BY_DELTAS_Closure(Closure):
     """
-    Copy template to shifted positions (stub for M4.2).
+    Copy template mask from input to shifted destinations on output canvas.
 
     params = {
-        "template_strategy": str,  # "smallest_object" | "largest_object" | etc.
-        "deltas": List[Tuple[int,int]],  # list of (dr, dc) shifts
-        "mode": str  # "strict" | "union"
+        "template_strategy": str,           # "smallest_object" | "per_color_smallest" | "residual_bbox"
+        "deltas": List[Tuple[int,int]],    # [(dr, dc), ...] shift vectors
+        "mode": str,                        # "strict" (intersect only)
+        "bg": int | None                    # background color (None = infer per-input)
     }
 
-    Law: Copy template T (derived from x) to positions T+delta for each delta in deltas.
+    Law: For template T from x_input, copy to {p + δ | δ ∈ deltas, p ∈ T}.
+         U[p + δ] ∩= {template_color(p)} for each δ.
     """
 
     def apply(self, U: SetValuedGrid, x_input: Grid) -> SetValuedGrid:
-        """Stub implementation - returns U unchanged."""
-        return U
+        """
+        Apply template copying (intersect only).
+
+        Algorithm:
+        1. Extract template T from x_input via template_strategy
+        2. For each delta (dr, dc) in deltas:
+           - For each pixel (r, c) in T:
+             - Target: (r + dr, c + dc)
+             - Intersect U[target] with {T[r,c]}
+        3. Return U_new (monotone, shrinking, deterministic)
+
+        Contract:
+        - Monotone & shrinking: U' = U & mask (only clear bits)
+        - Deterministic: no RNG, no I/O, no wall-clock
+        - ≤2-pass idempotent
+        - Canvas-aware: operates on U.H × U.W (output canvas)
+        - Masks input-only: template derived from x_input only
+
+        Returns:
+            U' where U'[r,c] = U[r,c] ∩ mask (only clear bits)
+        """
+        template_strategy = self.params["template_strategy"]
+        deltas = self.params["deltas"]
+        mode = self.params.get("mode", "strict")
+        bg = self.params.get("bg")
+
+        # Infer bg per-input if None
+        if bg is None:
+            bg = infer_bg_from_border(x_input)
+
+        # Step 1: Extract template from x_input
+        template_pixels = _extract_template(x_input, template_strategy, bg)
+
+        if not template_pixels:
+            # No template found - return U unchanged
+            return U
+
+        # Step 2: Build target pixels with colors
+        # template_pixels is dict: (r, c) -> color
+        target_writes = {}  # (r_target, c_target) -> color
+
+        for delta_r, delta_c in deltas:
+            for (r, c), color in template_pixels.items():
+                r_target = r + delta_r
+                c_target = c + delta_c
+                # Bounds check for canvas
+                if 0 <= r_target < U.H and 0 <= c_target < U.W:
+                    # Mode = "strict": intersect only (monotone shrinking)
+                    if mode == "strict":
+                        target_writes[(r_target, c_target)] = color
+                    # (No "union" mode - violates master operator discipline)
+
+        # Step 3: Apply writes (intersect only)
+        # Write to ALL positions: shifted positions get template colors,
+        # non-shifted positions get input colors or background
+        U_new = U.copy()
+        H_in, W_in = x_input.shape
+
+        for r in range(U.H):
+            for c in range(U.W):
+                if (r, c) in target_writes:
+                    # Shifted position: write template color
+                    color = target_writes[(r, c)]
+                    color_mask = color_to_mask(color)
+                    U_new.intersect(r, c, color_mask)
+                elif r < H_in and c < W_in:
+                    # Within input bounds: preserve input color
+                    input_color = int(x_input[r, c])
+                    input_mask = color_to_mask(input_color)
+                    U_new.intersect(r, c, input_mask)
+                else:
+                    # Outside input bounds and not a shifted position: fill with background
+                    bg_mask = color_to_mask(bg)
+                    U_new.intersect(r, c, bg_mask)
+
+        return U_new
+
+
+def _extract_template(x: Grid, strategy: str, bg: int) -> Dict[Tuple[int, int], int]:
+    """
+    Extract template mask from input.
+
+    Args:
+        x: Input grid
+        strategy: "smallest_object" | "per_color_smallest" | "residual_bbox"
+        bg: Background color
+
+    Returns:
+        Dict mapping (r, c) -> color for template pixels
+    """
+    if strategy == "smallest_object":
+        # Find smallest non-bg component
+        objs = components(x, bg=bg)
+        if not objs:
+            return {}
+        # Smallest by size, deterministic tie-break by bbox position
+        smallest = min(objs, key=lambda o: (o.size, o.bbox[0], o.bbox[1]))
+        return {(r, c): int(x[r, c]) for r, c in smallest.pixels}
+
+    elif strategy == "per_color_smallest":
+        # Find smallest component per non-bg color
+        objs = components(x, bg=bg)
+        if not objs:
+            return {}
+
+        # Group by color
+        by_color = {}
+        for obj in objs:
+            if obj.color not in by_color:
+                by_color[obj.color] = []
+            by_color[obj.color].append(obj)
+
+        # Pick smallest per color
+        template = {}
+        for color, color_objs in by_color.items():
+            smallest = min(color_objs, key=lambda o: (o.size, o.bbox[0], o.bbox[1]))
+            for r, c in smallest.pixels:
+                template[(r, c)] = int(x[r, c])
+
+        return template
+
+    elif strategy == "residual_bbox":
+        # This strategy is used when we have a y reference (train time only)
+        # For apply(), we can't use y, so fall back to smallest_object
+        # (The unifier will ensure this strategy is only used when appropriate)
+        objs = components(x, bg=bg)
+        if not objs:
+            return {}
+        smallest = min(objs, key=lambda o: (o.size, o.bbox[0], o.bbox[1]))
+        return {(r, c): int(x[r, c]) for r, c in smallest.pixels}
+
+    else:
+        raise ValueError(f"Unknown template strategy: {strategy}")
 
 
 def unify_COPY_BY_DELTAS(train: List[Tuple[Grid, Grid]]) -> List[Closure]:
     """
-    Unifier for COPY_BY_DELTAS (stub for M4.2).
+    Unifier for COPY_BY_DELTAS (composition-safe).
+
+    Algorithm:
+    1. Template Extraction: Enumerate strategies
+    2. Delta Discovery via shifted-mask equality
+    3. Composition-Safe Gates + Mask-Local Check
+    4. Return validated closures
 
     Returns:
-        Empty list (not yet implemented)
+        List of COPY_BY_DELTAS closures (0..N candidates)
+        Empty list if no unified params found
     """
-    return []
+    from .closure_engine import preserves_y, compatible_to_y, init_from_grid, init_top, _compute_canvas
+
+    valid = []
+
+    # Get canvas params once
+    canvas_closure = (unify_CANVAS_SIZE(train) or [None])[0]
+    canvas_params_dict = canvas_closure.params if canvas_closure else None
+
+    # Enumerate template strategies
+    strategies = ["smallest_object", "per_color_smallest"]
+
+    # Try bg=None first, then explicit bgs
+    bg_candidates = [None] + list(range(10))
+
+    for bg_cand in bg_candidates:
+        for strategy in strategies:
+            # Step 1: Extract templates and discover deltas for each train pair
+            deltas_per_pair = []
+
+            for x, y in train:
+                # Infer bg if None
+                if bg_cand is None:
+                    bg = infer_bg_from_border(x)
+                else:
+                    bg = bg_cand
+
+                # Extract template from x
+                template_pixels = _extract_template(x, strategy, bg)
+                if not template_pixels:
+                    deltas_per_pair.append(None)
+                    continue
+
+                # Build template mask (boolean array)
+                template_mask = set(template_pixels.keys())
+
+                # Compute residual mask M = (x != y) in FULL y region (canvas-aware)
+                # This handles shape-changing tasks where copied pixels are outside x
+                H_y, W_y = y.shape
+                H_overlap = min(x.shape[0], y.shape[0])
+                W_overlap = min(x.shape[1], y.shape[1])
+
+                M_target = set()
+                for r in range(H_y):
+                    for c in range(W_y):
+                        if r < H_overlap and c < W_overlap:
+                            # In overlap region: compare x and y
+                            if x[r, c] != y[r, c]:
+                                M_target.add((r, c))
+                        else:
+                            # Outside overlap: if y has non-bg, it's a change
+                            if bg_cand is None:
+                                bg_y = infer_bg_from_border(y)
+                            else:
+                                bg_y = bg_cand
+                            if y[r, c] != bg_y:
+                                M_target.add((r, c))
+
+                # Discover deltas via shifted-mask equality
+                # For each potential delta, check if shift(T, delta) matches M_target
+                pair_deltas = []
+
+                # Reasonable delta range (limit search space)
+                max_H = max(x.shape[0], y.shape[0])
+                max_W = max(x.shape[1], y.shape[1])
+                delta_range_r = range(-max_H, max_H + 1)
+                delta_range_c = range(-max_W, max_W + 1)
+
+                for dr in delta_range_r:
+                    for dc in delta_range_c:
+                        if dr == 0 and dc == 0:
+                            continue  # Skip identity
+
+                        # Compute shifted template
+                        shifted = {(r + dr, c + dc) for r, c in template_mask}
+
+                        if not shifted:
+                            continue
+
+                        # Check bounds and color match (check full y region, canvas-aware)
+                        all_match = True
+                        for (r_orig, c_orig) in template_mask:
+                            r_shift = r_orig + dr
+                            c_shift = c_orig + dc
+
+                            # Bounds check against y (output canvas)
+                            if not (0 <= r_shift < H_y and 0 <= c_shift < W_y):
+                                # Outside y bounds - skip this delta
+                                all_match = False
+                                break
+
+                            # Check if shifted position is in M_target
+                            if (r_shift, c_shift) not in M_target:
+                                all_match = False
+                                break
+
+                            # Check color match: y[shifted] should equal template color
+                            template_color = int(x[r_orig, c_orig])
+                            if int(y[r_shift, c_shift]) != template_color:
+                                all_match = False
+                                break
+
+                        if all_match and shifted:
+                            pair_deltas.append((dr, dc))
+
+                if pair_deltas:
+                    deltas_per_pair.append(set(pair_deltas))
+                else:
+                    deltas_per_pair.append(None)
+
+            # Step 2: Intersect deltas across all train pairs
+            if None in deltas_per_pair or not deltas_per_pair:
+                continue  # Skip if any pair failed
+
+            # Compute intersection of delta sets
+            common_deltas = deltas_per_pair[0]
+            for delta_set in deltas_per_pair[1:]:
+                common_deltas &= delta_set
+
+            if not common_deltas:
+                continue  # No common deltas found
+
+            # Convert to sorted list for determinism (ensure Python ints, not numpy ints)
+            deltas_list = [(int(dr), int(dc)) for dr, dc in sorted(list(common_deltas))]
+
+            # Step 3: Build candidate closure
+            params = {
+                "template_strategy": strategy,
+                "deltas": deltas_list,
+                "mode": "strict",
+                "bg": bg_cand
+            }
+
+            candidate = COPY_BY_DELTAS_Closure(
+                f"COPY_BY_DELTAS[strategy={strategy},deltas={len(deltas_list)},bg={bg_cand}]",
+                params
+            )
+
+            # Step 4: Composition-safe gates
+            try:
+                if not (preserves_y(candidate, train) and compatible_to_y(candidate, train)):
+                    continue
+
+                # Step 5: Mask-local check (ONE-STEP, no fixed-point iteration)
+                # For COPY_BY_DELTAS: Initialize U to TOP everywhere, then constrain
+                # cells outside M to x's colors. This allows copying to work.
+                mask_local_ok = True
+                for x, y in train:
+                    # Compute canvas per-input (deterministic from x)
+                    canvas = _compute_canvas(x, canvas_params_dict) if canvas_params_dict else {"H": y.shape[0], "W": y.shape[1]}
+
+                    # Build U: Start with TOP everywhere
+                    U_x = init_top(canvas["H"], canvas["W"])
+
+                    # For cells where x==y (outside M), constrain to singleton from x
+                    # This ensures closure preserves x where it shouldn't change
+                    for r in range(min(x.shape[0], canvas["H"])):
+                        for c in range(min(x.shape[1], canvas["W"])):
+                            if r < y.shape[0] and c < y.shape[1]:
+                                if x[r, c] == y[r, c]:
+                                    # Outside M: constrain to x's color
+                                    x_color = int(x[r, c])
+                                    x_mask = color_to_mask(x_color)
+                                    U_x.intersect(r, c, x_mask)
+                            # For cells in M (x!=y), leave as TOP so closure can write
+
+                    # Apply ONE step only
+                    U1 = candidate.apply(U_x, x)
+
+                    # Check mask-local: M = (x != y) on overlap region
+                    H_check = min(x.shape[0], y.shape[0], U1.H)
+                    W_check = min(x.shape[1], y.shape[1], U1.W)
+
+                    for r in range(H_check):
+                        for c in range(W_check):
+                            x_color = int(x[r, c])
+                            y_color = int(y[r, c])
+
+                            if x_color == y_color:
+                                # Outside M: U1 must equal {x} (no edits)
+                                allowed = U1.get_set(r, c)
+                                if allowed != {x_color}:
+                                    mask_local_ok = False
+                                    break
+                            else:
+                                # On M: y[r,c] must be in U1.get_set(r,c) and not empty
+                                allowed = U1.get_set(r, c)
+                                if len(allowed) == 0 or y_color not in allowed:
+                                    mask_local_ok = False
+                                    break
+
+                        if not mask_local_ok:
+                            break
+
+                    if not mask_local_ok:
+                        break
+
+                if mask_local_ok:
+                    valid.append(candidate)
+                    # Early exit after finding enough good candidates
+                    if len(valid) >= 5:
+                        return valid
+
+            except Exception:
+                # Skip candidates that fail gates or mask-local check
+                continue
+
+    return valid

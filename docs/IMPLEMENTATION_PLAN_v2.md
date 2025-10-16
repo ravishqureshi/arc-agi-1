@@ -1059,7 +1059,7 @@ def unify_TILING(train) -> list[Closure]:
 
 ---
 
-#### M4.2 — Closure: COPY_BY_DELTAS (shifted-mask equality)
+#### M4.2 — Closure: COPY_BY_DELTAS (shifted-mask equality) ✅ COMPLETED
 
 **Law (one-liner)**
 Copy a **template mask** (object/motif) from input to a set of shifted locations `Δ = {δ₁,…,δ_k}` on the output canvas; intersect `U` with the template’s color at those destinations.
