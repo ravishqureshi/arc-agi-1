@@ -44,6 +44,10 @@ from arc_solver.closures import (
     unify_MOD_PATTERN,
     CANVAS_SIZE_Closure,
     unify_CANVAS_SIZE,
+    TILING_Closure,
+    unify_TILING,
+    COPY_BY_DELTAS_Closure,
+    unify_COPY_BY_DELTAS,
     infer_bg_from_border
 )
 from arc_solver.closure_engine import _compute_canvas
@@ -526,6 +530,17 @@ def run_all_tests():
         ("CANVAS-FIX: Shape-growing meta closure", test_canvas_size_shape_growing),
         ("CANVAS-FIX: Same-shape regression", test_canvas_size_same_shape_regression),
         ("CANVAS-FIX: Consistent verify allows TOP", test_verify_consistent_on_train_allows_top),
+        # M4.1: TILING tests
+        ("TILING: Shrinking (global)", test_shrinking_tiling_global),
+        ("TILING: Idempotence (global)", test_idempotence_tiling_global),
+        ("TILING: Train exactness (global)", test_train_exactness_tiling_global),
+        ("TILING: Train exactness (on mask)", test_train_exactness_tiling_on_mask),
+        ("TILING: Patch-exact on residual", test_patch_exact_on_residual),
+        # M4.2: COPY_BY_DELTAS tests
+        ("COPY_BY_DELTAS: Shrinking", test_shrinking_copy_by_deltas),
+        ("COPY_BY_DELTAS: Idempotence", test_idempotence_copy_by_deltas),
+        ("COPY_BY_DELTAS: Train exactness (shifted)", test_train_exactness_copy_by_deltas_shifted_template),
+        ("COPY_BY_DELTAS: Composition safe", test_train_exactness_copy_by_deltas_composition_safe),
     ]
 
     passed = 0
@@ -1595,6 +1610,191 @@ def test_verify_consistent_on_train_allows_top():
 
     assert verify_consistent_on_train([canvas], train), "Identity closure should pass consistency"
     assert not verify_closures_on_train([canvas], train), "Identity closure should fail exactness"
+
+
+# ==============================================================================
+# M4.1: TILING / TILING_ON_MASK Property Tests
+# ==============================================================================
+
+def test_shrinking_tiling_global():
+    """Test: apply(U) ⊆ U for TILING (global mode)."""
+    # 2×2 motif [[1,2],[3,4]] tiled over 6×6 output (anchor (0,0))
+    x = np.array([[1, 2], [3, 4]])
+    motif = np.array([[1, 2], [3, 4]])
+    params = {"mode": "global", "motif": motif, "anchor": (0,0), "mask_template": None, "mask_params": None}
+    closure = TILING_Closure("test", params)
+
+    # U is 6×6 (output size)
+    U = init_top(6, 6)
+    U_copy = U.copy()
+    U_result = closure.apply(U, x)
+
+    assert grid_subset_or_equal(U_result, U_copy), "Shrinking violated"
+
+
+def test_idempotence_tiling_global():
+    """Test: ≤2-pass convergence for TILING (global)."""
+    x = np.array([[1, 2], [3, 4]])
+    motif = np.array([[1, 2], [3, 4]])
+    params = {"mode": "global", "motif": motif, "anchor": (0,0), "mask_template": None, "mask_params": None}
+    closure = TILING_Closure("test", params)
+
+    U, stats = run_fixed_point([closure], x, canvas={"H": 6, "W": 6})
+    assert stats["iters"] <= 2, f"Expected ≤2 iterations, got {stats['iters']}"
+
+
+def test_train_exactness_tiling_global():
+    """Test: TILING (global) achieves train exactness on mini."""
+    # Input 2×2, output 6×6 with 2×2 motif tiled
+    x = np.array([[1, 2], [3, 4]])
+    y = np.array([
+        [1, 2, 1, 2, 1, 2],
+        [3, 4, 3, 4, 3, 4],
+        [1, 2, 1, 2, 1, 2],
+        [3, 4, 3, 4, 3, 4],
+        [1, 2, 1, 2, 1, 2],
+        [3, 4, 3, 4, 3, 4]
+    ])
+    train = [(x, y)]
+
+    closures = unify_TILING(train)
+    assert len(closures) >= 1, "Should find TILING closure"
+
+    # Verify train exactness (needs CANVAS_SIZE + TILING composition)
+    canvas_closures = unify_CANVAS_SIZE(train)
+    all_closures = canvas_closures + closures
+    assert verify_closures_on_train(all_closures, train), "TILING should achieve train exactness with CANVAS_SIZE"
+
+
+def test_train_exactness_tiling_on_mask():
+    """Test: TILING_ON_MASK fills only BACKGROUND or NOT_LARGEST."""
+    # Input has largest component (color 1) + background (0)
+    # Output tiles motif only on background
+    x = np.array([[1, 1, 0, 0], [1, 1, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0]])
+    y = np.array([[1, 1, 2, 2], [1, 1, 2, 2], [2, 2, 2, 2], [2, 2, 2, 2]])
+    train = [(x, y)]
+
+    closures = unify_TILING(train)
+    assert len(closures) >= 1, "Should find TILING_ON_MASK closure"
+
+    # Check mode="mask" with mask_template="BACKGROUND"
+    found_masked = any(c.params.get("mode") == "mask" and c.params.get("mask_template") == "BACKGROUND" for c in closures)
+    assert found_masked, "Should find TILING_ON_MASK with BACKGROUND template"
+
+    # Verify train exactness
+    assert verify_closures_on_train(closures, train), "TILING_ON_MASK should achieve train exactness"
+
+
+def test_patch_exact_on_residual():
+    """Test: TILING changes only cells in M (residual mask)."""
+    # Input 2×2, output 4×4 with partial tiling (only on specific cells)
+    x = np.array([[1, 1], [1, 1]])
+    y = np.array([[1, 2, 1, 2], [1, 2, 1, 2], [1, 1, 1, 1], [1, 1, 1, 1]])
+    train = [(x, y)]
+
+    closures = unify_TILING(train)
+    assert len(closures) >= 1, "Should find patch-exact TILING closure"
+
+    # Verify: closure only modifies M = (x != y) cells
+    # Run on input to see where changes occur
+    # For output canvas, need CANVAS_SIZE
+    canvas_closures = unify_CANVAS_SIZE(train)
+    canvas = _compute_canvas(x, canvas_closures[0].params) if canvas_closures else {"H": 4, "W": 4}
+
+    U_final, _ = run_fixed_point(closures, x, canvas=canvas)
+    y_pred = U_final.to_grid_deterministic(fallback='lowest', bg=0)
+
+    # Check: changes only where x and y differ (in overlapping region)
+    M = (x != y[:x.shape[0], :x.shape[1]])  # Residual in overlapping region
+    for r in range(x.shape[0]):
+        for c in range(x.shape[1]):
+            if not M[r, c]:
+                # No change expected where x==y
+                assert y_pred[r, c] == x[r, c], f"Should preserve x[{r},{c}] where x==y"
+
+
+# ==============================================================================
+# M4.2: COPY_BY_DELTAS Property Tests
+# ==============================================================================
+
+def test_shrinking_copy_by_deltas():
+    """Test: apply(U) ⊆ U (closure only removes possibilities)."""
+    # Template: 2×2 block at top-left
+    x = np.array([[1, 1, 0, 0], [1, 1, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0]])
+
+    # Params: copy to shifted positions
+    params = {
+        "template_strategy": "smallest_object",
+        "deltas": [(0, 2), (2, 0)],  # right by 2, down by 2
+        "mode": "strict"
+    }
+    closure = COPY_BY_DELTAS_Closure("test", params)
+
+    U = init_top(4, 4)
+    U_copy = U.copy()
+    U_result = closure.apply(U, x)
+
+    assert grid_subset_or_equal(U_result, U_copy), "Shrinking violated"
+
+
+def test_idempotence_copy_by_deltas():
+    """Test: ≤2-pass convergence for COPY_BY_DELTAS."""
+    x = np.array([[2, 2, 0, 0], [2, 2, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0]])
+
+    params = {
+        "template_strategy": "smallest_object",
+        "deltas": [(0, 2)],
+        "mode": "strict"
+    }
+    closure = COPY_BY_DELTAS_Closure("test", params)
+
+    U, stats = run_fixed_point([closure], x)
+    assert stats["iters"] <= 2, f"Expected ≤2 iterations, got {stats['iters']}"
+
+
+def test_train_exactness_copy_by_deltas_shifted_template():
+    """Test: COPY_BY_DELTAS copies template to shifted positions exactly."""
+    # Input: 2×2 red block at top-left
+    x = np.array([[1, 1, 0, 0, 0, 0], [1, 1, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0]])
+
+    # Output: Same block copied to (0,3) — shifted right by 3
+    y = np.array([[1, 1, 0, 1, 1, 0], [1, 1, 0, 1, 1, 0], [0, 0, 0, 0, 0, 0]])
+
+    train = [(x, y)]
+
+    closures = unify_COPY_BY_DELTAS(train)
+    assert len(closures) >= 1, "Should find COPY_BY_DELTAS closure"
+
+    # Verify train exactness
+    assert verify_closures_on_train(closures, train), \
+        "COPY_BY_DELTAS should achieve train exactness"
+
+
+def test_train_exactness_copy_by_deltas_composition_safe():
+    """Test: COPY_BY_DELTAS composes with other closures (preserves_y + compatible_to_y)."""
+    # Task with shape-changing: Input 2x2, Output 2x4 (canvas expansion + object copying)
+    x = np.array([[3, 0], [0, 0]])
+    y = np.array([[3, 0, 3, 0], [0, 0, 0, 0]])  # Copy 1x1 object with delta (0, 2)
+
+    train = [(x, y)]
+
+    # COPY_BY_DELTAS should find closures and pass composition gates
+    copy_closures = unify_COPY_BY_DELTAS(train)
+    assert len(copy_closures) >= 1, "Should find COPY_BY_DELTAS closures"
+
+    # Verify gates
+    for closure in copy_closures:
+        assert preserves_y(closure, train), f"{closure.name} should preserve y"
+        assert compatible_to_y(closure, train), f"{closure.name} should be compatible to y"
+
+    # Verify can compose with CANVAS_SIZE and achieve train exactness
+    canvas_closures = unify_CANVAS_SIZE(train)
+    assert len(canvas_closures) >= 1, "Should find CANVAS_SIZE closure"
+
+    # Compose and verify train exactness
+    composed = canvas_closures + copy_closures[:1]  # Use first COPY_BY_DELTAS closure
+    assert verify_closures_on_train(composed, train), \
+        "CANVAS_SIZE + COPY_BY_DELTAS should achieve train exactness"
 
 
 # ==============================================================================

@@ -1084,6 +1084,345 @@ def unify_MOD_PATTERN(train: List[Tuple[Grid, Grid]]) -> List[Closure]:
 
 
 # ==============================================================================
+# M4.1: TILING / TILING_ON_MASK
+# ==============================================================================
+
+class TILING_Closure(Closure):
+    """
+    Tile motif across output canvas (global or masked).
+
+    params = {
+        "mode": "global" | "mask",
+        "motif": np.ndarray[h,w],       # colors derived from x
+        "anchor": Tuple[int,int],       # (ar, ac)
+        "mask_template": Optional[str], # for mode="mask": "ALL" | "NONZERO" | "BACKGROUND" | "NOT_LARGEST" | "PARITY" | "STRIPES"
+        "mask_params": Optional[Dict],  # e.g., {"anchor2": (0,1)} for PARITY, {"axis": "row", "k": 2} for STRIPES
+    }
+
+    Law: Tile motif across output lattice (H_out × W_out).
+         If mode="mask", restrict writes to input-only mask.
+         Intersect only (U & motif-bitmask at each covered cell).
+    """
+
+    def apply(self, U: SetValuedGrid, x_input: Grid) -> SetValuedGrid:
+        """
+        Tile motif over output lattice (U.H × U.W).
+
+        Algorithm:
+        1. Extract params: mode, motif, anchor, mask_template, mask_params
+        2. If mode="mask", compute mask_template(x_input)
+        3. For each cell (r,c) in U:
+           - Compute motif position: (mr, mc) = ((r - ar) % h, (c - ac) % w)
+           - If mode="global" OR (mode="mask" AND mask[r,c]):
+             - Intersect U[r,c] with {motif[mr, mc]}
+           - Else: no change
+        4. Return U_new (deterministic, monotone, shrinking)
+
+        Contract:
+        - Monotone & shrinking: U' = U & mask (only clear bits)
+        - Deterministic: no RNG, no I/O, no wall-clock
+        - ≤2-pass idempotent
+        - Output-canvas aware: operates on U.H × U.W (from fixed-point engine)
+        - Masks are input-only: computed from x_input only
+        """
+        mode = self.params["mode"]
+        motif = self.params["motif"]
+        ar, ac = self.params["anchor"]
+        mask_template = self.params.get("mask_template")
+        mask_params = self.params.get("mask_params", {})
+
+        h, w = motif.shape
+        U_new = U.copy()
+
+        # Compute mask if mode="mask"
+        if mode == "mask":
+            # Compute mask from x_input (input-only)
+            mask = _compute_tiling_mask(x_input, mask_template, mask_params)
+        else:
+            # mode="global": no mask (all cells allowed)
+            mask = None
+
+        # Tile motif across output canvas (U.H × U.W)
+        for r in range(U.H):
+            for c in range(U.W):
+                # Check if this cell should be written with motif
+                if mode == "mask":
+                    # Only write motif if within x_input bounds and mask is True
+                    if r >= x_input.shape[0] or c >= x_input.shape[1]:
+                        continue  # Outside input bounds, skip
+                    if not mask[r, c]:
+                        # Mask is False: preserve input color
+                        if r < x_input.shape[0] and c < x_input.shape[1]:
+                            input_color = int(x_input[r, c])
+                            input_mask = color_to_mask(input_color)
+                            U_new.intersect(r, c, input_mask)
+                        continue
+                # mode="global": write to all cells
+
+                # Compute motif position (with wrapping)
+                mr = (r - ar) % h
+                mc = (c - ac) % w
+
+                # Get motif color
+                motif_color = int(motif[mr, mc])
+                motif_mask = color_to_mask(motif_color)
+
+                # Intersect (only clear bits)
+                U_new.intersect(r, c, motif_mask)
+
+        return U_new
+
+
+def _compute_tiling_mask(x: Grid, template: str, params: dict) -> np.ndarray:
+    """
+    Compute boolean mask for TILING_ON_MASK.
+
+    Templates:
+    - ALL: mask = all True
+    - NONZERO: mask = (x != bg)
+    - BACKGROUND: mask = (x == bg)
+    - NOT_LARGEST: mask = (not in largest component)
+    - PARITY: mask = checkerboard pattern from anchor2
+    - STRIPES: mask = repeating stripes along axis
+
+    Returns:
+        Boolean mask (H×W array)
+    """
+    H, W = x.shape
+
+    if template == "ALL":
+        return np.ones((H, W), dtype=bool)
+
+    elif template == "NONZERO":
+        bg = params.get("bg", 0)
+        return (x != bg)
+
+    elif template == "BACKGROUND":
+        bg = params.get("bg", 0)
+        return (x == bg)
+
+    elif template == "NOT_LARGEST":
+        bg = params.get("bg", 0)
+        objs = components(x, bg=bg)
+        if not objs:
+            # No components - all pixels are background
+            return np.ones((H, W), dtype=bool)
+
+        # Find largest component
+        largest = max(objs, key=lambda o: (o.size, -o.bbox[0], -o.bbox[1]))
+        largest_pixels = set(largest.pixels)
+
+        # Mask is True where NOT in largest
+        mask = np.ones((H, W), dtype=bool)
+        for r, c in largest_pixels:
+            mask[r, c] = False
+
+        return mask
+
+    elif template == "PARITY":
+        # Checkerboard pattern from anchor2
+        ar2, ac2 = params.get("anchor2", (0, 0))
+        mask = np.zeros((H, W), dtype=bool)
+        for r in range(H):
+            for c in range(W):
+                # Parity: (r + c) % 2 == (ar2 + ac2) % 2
+                if (r + c) % 2 == (ar2 + ac2) % 2:
+                    mask[r, c] = True
+        return mask
+
+    elif template == "STRIPES":
+        # Repeating stripes along axis
+        axis = params.get("axis", "row")
+        k = params.get("k", 2)
+        mask = np.zeros((H, W), dtype=bool)
+
+        if axis == "row":
+            # Horizontal stripes (vary by row)
+            for r in range(H):
+                if (r // k) % 2 == 0:
+                    mask[r, :] = True
+        elif axis == "col":
+            # Vertical stripes (vary by column)
+            for c in range(W):
+                if (c // k) % 2 == 0:
+                    mask[:, c] = True
+
+        return mask
+
+    else:
+        raise ValueError(f"Unknown mask template: {template}")
+
+
+def unify_TILING(train: List[Tuple[Grid, Grid]]) -> List[Closure]:
+    """
+    Unifier for TILING / TILING_ON_MASK (composition-safe).
+
+    Algorithm:
+    1. For each train pair, compute residual M = (x != y) in overlapping region
+    2. Candidate enumeration:
+       - anchors ∈ {(0,0), bbox_corners(x), quadrant_origins(x)}
+       - Infer motif (h,w) from y's periodicity or M's structure
+       - Derive motif colors from x (Option A: canvas mapper φ; Option B: mode color per tile)
+       - mode="global" and mode="mask" with mask_template ∈ {ALL, NONZERO, BACKGROUND, NOT_LARGEST, PARITY, STRIPES}
+    3. For each candidate:
+       - Check patch-exact on M, preserves_y, compatible_to_y
+       - If all checks pass, append candidate
+    4. Return list of all passing candidates (may be 0..N)
+
+    Returns:
+        List of TILING closures (0..N candidates)
+        Empty list if no params work on ALL train pairs
+    """
+    from .closure_engine import preserves_y, compatible_to_y, run_fixed_point, _compute_canvas
+
+    valid = []
+
+    # Step 1: Enumerate anchors
+    x0, y0 = train[0]
+    H_in, W_in = x0.shape
+    H_out, W_out = y0.shape
+
+    anchors = {(0, 0)}  # Grid origin
+
+    # Add bbox corners from first train input
+    for bg_candidate in range(10):
+        objs = components(x0, bg=bg_candidate)
+        if objs:
+            r_min = min(o.bbox[0] for o in objs)
+            c_min = min(o.bbox[1] for o in objs)
+            r_max = max(o.bbox[2] for o in objs)
+            c_max = max(o.bbox[3] for o in objs)
+
+            anchors.add((r_min, c_min))
+            anchors.add((r_min, c_max))
+            anchors.add((r_max, c_min))
+            anchors.add((r_max, c_max))
+
+    # Add quadrant origins
+    anchors.add((0, W_in // 2))
+    anchors.add((H_in // 2, 0))
+    anchors.add((H_in // 2, W_in // 2))
+
+    # Limit to max 8 anchors
+    anchors = sorted(anchors)[:8]
+
+    # Step 2: Enumerate motif sizes (small range)
+    # Use fixed constant to avoid depending on output dimensions
+    MAX_MOTIF_SIZE = 6
+    motif_sizes = []
+    for h in range(1, MAX_MOTIF_SIZE + 1):
+        for w in range(1, MAX_MOTIF_SIZE + 1):
+            motif_sizes.append((h, w))
+
+    # Step 3: Enumerate modes and templates
+    modes_and_templates = [("global", None, {})]
+    for template in ["ALL", "NONZERO", "BACKGROUND", "NOT_LARGEST"]:
+        modes_and_templates.append(("mask", template, {}))
+    # PARITY with anchor2 variants
+    for ar2, ac2 in [(0, 0), (0, 1), (1, 0), (1, 1)]:
+        modes_and_templates.append(("mask", "PARITY", {"anchor2": (ar2, ac2)}))
+    # STRIPES with axis and k variants
+    for axis in ["row", "col"]:
+        for k in [2, 3]:
+            modes_and_templates.append(("mask", "STRIPES", {"axis": axis, "k": k}))
+
+    # Step 4: Enumerate candidates
+    for ar, ac in anchors:
+        for h, w in motif_sizes:
+            # Enumerate modes
+            for mode, mask_template, mask_params in modes_and_templates:
+                # Derive motif based on mode
+                motif = np.zeros((h, w), dtype=int)
+
+                if mode == "global":
+                    # For global mode: derive from input x0
+                    for mr in range(h):
+                        for mc in range(w):
+                            r_in = (ar + mr) % H_in
+                            c_in = (ac + mc) % W_in
+                            motif[mr, mc] = int(x0[r_in, c_in])
+                else:
+                    # For mask mode: infer from INPUT x0 on the mask
+                    # Derive motif colors from x (input-only), use y only for verification
+                    try:
+                        mask = _compute_tiling_mask(x0, mask_template, mask_params)
+                        # Collect colors from x0 (INPUT) where mask is True
+                        colors_on_mask = []
+                        for r in range(min(H_in, mask.shape[0])):
+                            for c in range(min(W_in, mask.shape[1])):
+                                if mask[r, c]:
+                                    colors_on_mask.append(int(x0[r, c]))
+
+                        if not colors_on_mask:
+                            continue  # Empty mask, skip
+
+                        # Use mode color from x0 on mask (deterministic tie-breaking)
+                        from collections import Counter
+                        counts = Counter(colors_on_mask)
+                        mode_color = min(counts.keys(), key=lambda c: (-counts[c], c))
+
+                        # Fill motif with mode color
+                        motif.fill(mode_color)
+                    except:
+                        continue  # Skip if mask computation fails
+                # Build candidate params
+                params = {
+                    "mode": mode,
+                    "motif": motif,
+                    "anchor": (ar, ac),
+                    "mask_template": mask_template,
+                    "mask_params": mask_params
+                }
+
+                candidate = TILING_Closure(
+                    f"TILING[mode={mode},anchor=({ar},{ac}),h={h},w={w},template={mask_template}]",
+                    params
+                )
+
+                # Step 5: Composition-safe gates
+                try:
+                    if not (preserves_y(candidate, train) and compatible_to_y(candidate, train)):
+                        continue
+
+                    # Additional check: patch-exact on M
+                    # For efficiency, only check patch-exactness if gates pass
+                    patch_exact = True
+                    for x, y in train:
+                        # Compute canvas
+                        canvas_candidates = unify_CANVAS_SIZE(train)
+                        canvas_params = canvas_candidates[0].params if canvas_candidates else None
+                        canvas = _compute_canvas(x, canvas_params) if canvas_params else {"H": y.shape[0], "W": y.shape[1]}
+
+                        # Run fixed-point with CANVAS_SIZE + candidate
+                        closures_to_test = canvas_candidates + [candidate] if canvas_candidates else [candidate]
+                        U_final, _ = run_fixed_point(closures_to_test, x, canvas=canvas)
+
+                        # Check if fully determined
+                        if not U_final.is_fully_determined():
+                            patch_exact = False
+                            break
+
+                        y_pred = U_final.to_grid_deterministic(fallback='lowest', bg=0)
+
+                        # Check exact match with y (train exactness)
+                        if not np.array_equal(y_pred, y):
+                            patch_exact = False
+                            break
+
+                    if patch_exact:
+                        valid.append(candidate)
+                        # Early exit after finding enough good candidates
+                        # (but allow more for complex cases)
+                        if len(valid) >= 10:
+                            return valid
+                except Exception:
+                    # Skip candidates that fail gates or patch-exact check
+                    continue
+
+    return valid
+
+
+# ==============================================================================
 # NX-UNSTICK: COLOR_PERM
 # ==============================================================================
 
@@ -1537,4 +1876,36 @@ def unify_CANVAS_SIZE(train: List[Tuple[Grid, Grid]]) -> List[Closure]:
             return [candidate]
 
     # No strategy fits
+    return []
+
+
+# ==============================================================================
+# M4.2: COPY_BY_DELTAS (Stub - to be implemented)
+# ==============================================================================
+
+class COPY_BY_DELTAS_Closure(Closure):
+    """
+    Copy template to shifted positions (stub for M4.2).
+
+    params = {
+        "template_strategy": str,  # "smallest_object" | "largest_object" | etc.
+        "deltas": List[Tuple[int,int]],  # list of (dr, dc) shifts
+        "mode": str  # "strict" | "union"
+    }
+
+    Law: Copy template T (derived from x) to positions T+delta for each delta in deltas.
+    """
+
+    def apply(self, U: SetValuedGrid, x_input: Grid) -> SetValuedGrid:
+        """Stub implementation - returns U unchanged."""
+        return U
+
+
+def unify_COPY_BY_DELTAS(train: List[Tuple[Grid, Grid]]) -> List[Closure]:
+    """
+    Unifier for COPY_BY_DELTAS (stub for M4.2).
+
+    Returns:
+        Empty list (not yet implemented)
+    """
     return []

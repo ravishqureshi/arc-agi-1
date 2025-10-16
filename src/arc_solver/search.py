@@ -229,7 +229,9 @@ def autobuild_closures(train):
         unify_OPEN_CLOSE,
         unify_AXIS_PROJECTION,
         unify_SYMMETRY_COMPLETION,
-        unify_MOD_PATTERN
+        unify_MOD_PATTERN,
+        unify_TILING,
+        unify_COPY_BY_DELTAS
     )
     from .closure_engine import verify_closures_on_train, verify_consistent_on_train
 
@@ -257,6 +259,10 @@ def autobuild_closures(train):
     candidates += unify_SYMMETRY_COMPLETION(train)
     # M3.1: MOD_PATTERN
     candidates += unify_MOD_PATTERN(train)
+    # M4.1: TILING / TILING_ON_MASK
+    candidates += unify_TILING(train)
+    # M4.2: COPY_BY_DELTAS
+    candidates += unify_COPY_BY_DELTAS(train)
 
     # NEW: Two-phase greedy composition
     kept_meta = []

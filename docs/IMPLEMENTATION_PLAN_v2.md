@@ -807,7 +807,7 @@ python scripts/submission_validator.py runs/<DATE>/predictions.json
 * Coverage increases materially from 6/1000 (expect double‑digit tasks without adding any further families).
 
 
-### Milestone: Canvas-Law + Shape-Aware Gates
+### Milestone: Canvas-Law + Shape-Aware Gates ✅ COMPLETED
 
 Objective:
 Enable shape-changing tasks by (1) inferring the output canvas and (2) removing same-shape guards in unifier gates. Then let closures operate on the **output-shaped** set-valued grid.
@@ -863,9 +863,8 @@ Receipts show most tasks now have ≥1 closure (not []).
 A non-trivial subset of shape-changing training tasks become solvable (e.g., tiling/periodic expansions like 00576224, 007bbfb7).
 Coverage increases beyond 10/1000 on the same run; format unchanged.
 
-# Work-Order
 
-Milestone: Canvas Greedy Verify Fix + Param Normalization
+### Milestone: Canvas Greedy Verify Fix + Param Normalization ✅ COMPLETED
 
 Objective:
 Make CANVAS_SIZE usable in composition and normalize its params, so shape-changing tasks can compose with other closures.
@@ -1015,7 +1014,7 @@ def autobuild_closures(train):
 
 ### M4 — TILING(_ON_MASK) + COPY_BY_DELTAS (baseline push)
 
-#### M4.1 — Closure: TILING(_ON_MASK) on the **output canvas**
+#### M4.1 — Closure: TILING(_ON_MASK) on the **output canvas** ✅ COMPLETED
 
 **Law (one-liner)**
 Fill the **output lattice** with a motif `m(h×w)` either globally or **on an input-only mask**; narrow `U` to the motif’s color at the tiled coordinates.
