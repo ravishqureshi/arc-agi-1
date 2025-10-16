@@ -221,7 +221,9 @@ def autobuild_closures(train):
     Ordered by cost (cheap → expensive).
     """
     from .closures import (
+        unify_COLOR_PERM,
         unify_KEEP_LARGEST,
+        unify_RECOLOR_ON_MASK,
         unify_OUTLINE_OBJECTS,
         unify_OPEN_CLOSE,
         unify_AXIS_PROJECTION,
@@ -232,8 +234,12 @@ def autobuild_closures(train):
 
     # Collect all candidates that pass individual composition-safe gates
     candidates = []
+    # NX-UNSTICK: Color ops first (cheap, global)
+    candidates += unify_COLOR_PERM(train)
     # B1: KEEP_LARGEST_COMPONENT
     candidates += unify_KEEP_LARGEST(train)
+    # NX-UNSTICK: Recolor after geometry ops
+    candidates += unify_RECOLOR_ON_MASK(train)
     # B2: OUTLINE_OBJECTS
     candidates += unify_OUTLINE_OBJECTS(train)
     # M2.1: OPEN_CLOSE

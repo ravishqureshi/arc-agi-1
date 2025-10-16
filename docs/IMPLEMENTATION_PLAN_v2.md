@@ -682,9 +682,9 @@ def unify_MOD_PATTERN(train) -> list[Closure]:
 
 ---
 
-#### Work-Order for Gate-Fix
+#### Work-Order for Gate-Fix ✅ COMPLETED
 
-Milestone: Gate-Fix — Composition Compatibility + Unifier Collection
+Milestone: Gate-Fix — Composition Compatibility + Unifier Collection 
 
 Objective:
 Fix the composition gate so valid closures aren’t rejected early, and let unifiers **collect** all compatible candidates (composition decides). This should immediately raise coverage.
@@ -753,6 +753,59 @@ Verify commands:
 python scripts/run_public.py --arc_public_dir <FILL_THIS> --out runs/<DATE>
 bash scripts/determinism.sh <FILL_THIS>
 python scripts/submission_validator.py runs/<DATE>/predictions.json
+
+
+**Work Order: NX‑UNSTICK (Mask‑Induction + Color Closures)**
+
+**Goal:** Convert empty closure sets into composable ones and unlock palette‑changing tasks.
+**Scope:** Update inducers (mask‑driven), add `COLOR_PERM`, add `RECOLOR_ON_MASK`, refit parameterization to strategy form where needed.
+**Inputs:** Repo at HEAD; training dataset `data/arc-agi_training_challenges.json` + `..._solutions.json`.
+**Guardrail:** Use **train** only for induction; test only for applying unified closures; no eval/test leakage.
+
+**Tasks:**
+
+1. **Refactor all inducers to mask‑driven checks**
+
+   * For each existing family (KEEP_LARGEST, OUTLINE, OPEN/CLOSE, AXIS_PROJECTION, SYMMETRY, MOD_PATTERN):
+
+     * Change acceptance from `y == T(x)` to:
+       “`patch(x, T, M)` equals `y` **exactly** and `T` proposes **no changes** outside `M`”, where `M=(x≠y)`.”
+   * Add unit tests: each inducer **accepts** a partial mask fit and **rejects** any edit outside `M`.
+
+2. **Implement COLOR_PERM closure**
+
+   * **Inducer:** Deduce a permutation π per pair; unify exactly across all pairs; ensure bijective on used set.
+   * **Closure:** `U[p] ∩= {π(x(p))}`.
+
+3. **Implement RECOLOR_ON_MASK(template, target_strategy)**
+
+   * **Templates** to support now: `NONZERO`, `BACKGROUND`, `NOT_LARGEST`, `PARITY(anchor in {0,1}²)`, `STRIPES(axis in {row,col}, k in {2,3})`, `BORDER_RING(1)`.
+   * **Strategies** to support now: `CONST(c)`, `MODE_ON_MASK`, `DOMINANT_BORDER`.
+   * **Inducer:** Pick the (template, strategy, params) that makes `template(x) == M` and target equals y on M, unified across pairs.
+
+4. **Parameter → strategy normalization**
+
+   * For SYMMETRY and `bg` usage, replace constant params with functions: `axis="auto_best"`; `bg="auto_mode"`. Unify on the **function name**.
+   * Update receipts to log the **strategy** and the **per‑pair realized value** for audit.
+
+5. **Run & verify**
+
+   * Re‑run training suite; ensure `receipts.jsonl` shows most tasks with ≥1 closure.
+   * Track: (# tasks with closures), (# with at least one color closure), (# solved).
+   * If coverage is still ~6/1000, dump top 20 unsolved with largest singleton gains and inspect missing families.
+
+**Reviewers to run (with the same Context Pack):**
+
+* `anti-hardcode-implementation-auditor-reviewer` — only to ensure no test/eval leakage and no “approximate residual” acceptance on train.
+* `math-closure-soundness-reviewer` — verify the new laws: mask‑local fit, permutation bijectivity, and strategy unification.
+* `submission-determinism-reviewer` — quick determinism pass (no new nondeterminism introduced).
+
+**Acceptance:**
+
+* Median closures per task on train ≥ 1.
+* At least **one color closure** present in ≥ 25% of tasks.
+* Coverage increases materially from 6/1000 (expect double‑digit tasks without adding any further families).
+
 
 
 #### M3.2 — Closure: DIAGONAL_REPEAT (shift chain along Δ=(dr,dc), k steps)

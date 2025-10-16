@@ -507,6 +507,14 @@ def run_all_tests():
         # Gate-Fix tests
         ("Gate-Fix: compatible_to_y allows complementary", test_compatible_to_y_allows_complementary_closures),
         ("Gate-Fix: unifiers collect multiple candidates", test_unifiers_collect_multiple_candidates),
+        # NX-UNSTICK tests
+        ("NX-UNSTICK: Mask-driven keeps correct pixels", test_mask_driven_keeps_correct_pixels),
+        ("NX-UNSTICK: COLOR_PERM bijective check", test_color_perm_bijective),
+        ("NX-UNSTICK: COLOR_PERM train exact", test_color_perm_train_exact),
+        ("NX-UNSTICK: COLOR_PERM shrinking", test_color_perm_shrinking),
+        ("NX-UNSTICK: RECOLOR_ON_MASK templates", test_recolor_on_mask_templates),
+        ("NX-UNSTICK: RECOLOR_ON_MASK strategies", test_recolor_on_mask_strategies),
+        ("NX-UNSTICK: RECOLOR_ON_MASK train exact", test_recolor_on_mask_train_exact),
     ]
 
     passed = 0
@@ -1281,6 +1289,141 @@ def test_unifiers_collect_multiple_candidates():
     for c in closures:
         assert preserves_y(c, train), f"Collected closure {c.name} should preserve y"
         assert compatible_to_y(c, train), f"Collected closure {c.name} should be compatible"
+
+
+# ==============================================================================
+# NX-UNSTICK: Mask-driven acceptance test
+# ==============================================================================
+
+def test_mask_driven_keeps_correct_pixels():
+    """Test: Closures preserve pixels where x[r,c] == y[r,c]."""
+    # Task where some pixels are already correct
+    x = np.array([[1, 1, 0], [0, 2, 2], [0, 0, 0]])
+    y = np.array([[1, 1, 0], [0, 0, 0], [0, 0, 0]])  # (0,0), (0,1), (0,2), (1,0) same
+
+    # Pixel (1,1) and (1,2) differ: (1,1): 2→0, (1,2): 2→0
+    # KEEP_LARGEST should only modify pixels that differ
+    closures = unify_KEEP_LARGEST([(x, y)])
+
+    assert len(closures) >= 1, "Should find closure that preserves correct pixels"
+
+    # Verify: Applying to x should produce y exactly
+    U, _ = run_fixed_point(closures, x)
+    y_pred = U.to_grid()
+    assert np.array_equal(y_pred, y), "Mask-driven closure should produce exact y"
+
+
+# ==============================================================================
+# NX-UNSTICK: COLOR_PERM tests
+# ==============================================================================
+
+def test_color_perm_bijective():
+    """Test: COLOR_PERM rejects non-bijective mappings."""
+    from arc_solver.closures import unify_COLOR_PERM
+
+    # Non-bijective: 1→3, 2→3 (collision)
+    x = np.array([[1, 2]])
+    y = np.array([[3, 3]])
+    train = [(x, y)]
+
+    closures = unify_COLOR_PERM(train)
+    # Should reject (not bijective)
+    assert len(closures) == 0, "Should reject non-bijective mapping"
+
+
+def test_color_perm_train_exact():
+    """Test: COLOR_PERM achieves train exactness on simple swap."""
+    from arc_solver.closures import unify_COLOR_PERM
+
+    # Swap: 1→2, 2→1, 0→0
+    x = np.array([[0, 1, 2], [1, 2, 0]])
+    y = np.array([[0, 2, 1], [2, 1, 0]])
+    train = [(x, y)]
+
+    closures = unify_COLOR_PERM(train)
+    assert len(closures) >= 1, "Should find color permutation"
+
+    U, _ = run_fixed_point(closures, x)
+    y_pred = U.to_grid()
+    assert np.array_equal(y_pred, y), "COLOR_PERM should produce exact y"
+
+
+def test_color_perm_shrinking():
+    """Test: COLOR_PERM.apply is shrinking."""
+    from arc_solver.closures import COLOR_PERM_Closure
+
+    x = np.array([[1, 2], [3, 4]])
+    perm = {1: 5, 2: 6, 3: 7, 4: 8}
+    closure = COLOR_PERM_Closure("test", {"perm": perm})
+
+    U = init_top(2, 2)
+    U_copy = U.copy()
+    U_result = closure.apply(U, x)
+
+    assert grid_subset_or_equal(U_result, U_copy), "COLOR_PERM should be shrinking"
+
+
+# ==============================================================================
+# NX-UNSTICK: RECOLOR_ON_MASK tests
+# ==============================================================================
+
+def test_recolor_on_mask_templates():
+    """Test: RECOLOR_ON_MASK templates compute correct masks."""
+    from arc_solver.closures import RECOLOR_ON_MASK_Closure
+
+    x = np.array([[0, 1, 1], [0, 2, 0], [0, 0, 0]])
+
+    # Template: NONZERO
+    closure = RECOLOR_ON_MASK_Closure(
+        "test",
+        {"template": "NONZERO", "template_params": {}, "strategy": "CONST", "strategy_params": {"c": 5}, "bg": 0}
+    )
+
+    # Should recolor all non-zero pixels to 5
+    U = init_top(3, 3)
+    U_result = closure.apply(U, x)
+
+    # Check that non-zero pixels are constrained to {5}
+    assert U_result.get_set(0, 1) == {5}, "Non-zero pixel should be constrained to {5}"
+    assert U_result.get_set(0, 2) == {5}, "Non-zero pixel should be constrained to {5}"
+    assert U_result.get_set(1, 1) == {5}, "Non-zero pixel should be constrained to {5}"
+    # Background pixels should still allow all colors (not constrained by this closure)
+    assert len(U_result.get_set(0, 0)) == 10, "Background pixel should not be constrained"
+
+
+def test_recolor_on_mask_strategies():
+    """Test: RECOLOR_ON_MASK strategies compute correct target colors."""
+    from arc_solver.closures import _compute_target_color
+    import numpy as np
+
+    x = np.array([[1, 1, 1], [1, 2, 1], [1, 1, 1]])
+
+    # Strategy: MODE_ON_MASK (most frequent color in mask)
+    # If mask is entire grid, mode is 1 (appears 8 times vs 2 once)
+    T = np.ones((3, 3), dtype=bool)
+    target = _compute_target_color(x, T, "MODE_ON_MASK", {}, bg=0)
+    assert target == 1, "MODE_ON_MASK should return most frequent color (1)"
+
+    # Strategy: CONST
+    target = _compute_target_color(x, T, "CONST", {"c": 7}, bg=0)
+    assert target == 7, "CONST should return specified color"
+
+
+def test_recolor_on_mask_train_exact():
+    """Test: RECOLOR_ON_MASK achieves train exactness."""
+    from arc_solver.closures import unify_RECOLOR_ON_MASK
+
+    # Recolor all non-zero to 8
+    x = np.array([[0, 1, 2], [3, 0, 4]])
+    y = np.array([[0, 8, 8], [8, 0, 8]])
+    train = [(x, y)]
+
+    closures = unify_RECOLOR_ON_MASK(train)
+    assert len(closures) >= 1, "Should find RECOLOR_ON_MASK closure"
+
+    U, _ = run_fixed_point(closures, x)
+    y_pred = U.to_grid()
+    assert np.array_equal(y_pred, y), "RECOLOR_ON_MASK should produce exact y"
 
 
 # ==============================================================================

@@ -1038,3 +1038,367 @@ def unify_MOD_PATTERN(train: List[Tuple[Grid, Grid]]) -> List[Closure]:
                     valid.append(candidate)
 
     return valid
+
+
+# ==============================================================================
+# NX-UNSTICK: COLOR_PERM
+# ==============================================================================
+
+class COLOR_PERM_Closure(Closure):
+    """
+    Global color permutation.
+
+    params = {"perm": Dict[int, int]}  # bijective color mapping
+
+    Law: y[r,c] = π(x[r,c]) for all cells, where π is the permutation
+    """
+
+    def apply(self, U: SetValuedGrid, x_input: Grid) -> SetValuedGrid:
+        """
+        Apply color permutation (intersect only).
+
+        For each cell (r,c):
+        - Get x_color = x_input[r,c]
+        - If x_color in perm: target = perm[x_color]
+        - Intersect U[r,c] with {target}
+
+        Returns U_new (monotone, shrinking, deterministic)
+        """
+        perm = self.params["perm"]
+        U_new = U.copy()
+
+        for r in range(U.H):
+            for c in range(U.W):
+                x_color = int(x_input[r, c])
+                if x_color in perm:
+                    target = perm[x_color]
+                    target_mask = color_to_mask(target)
+                    U_new.intersect(r, c, target_mask)
+                # If x_color not in perm, leave U unchanged (identity on that color)
+
+        return U_new
+
+
+def unify_COLOR_PERM(train: List[Tuple[Grid, Grid]]) -> List[Closure]:
+    """
+    Unifier for COLOR_PERM (composition-safe).
+
+    Algorithm:
+    1. Check for shape mismatches (skip shape-changing tasks)
+    2. Extract color mappings from all train pairs
+    3. Ensure bijective (no collisions)
+    4. Build candidate closure
+    5. Check preserves_y + compatible_to_y
+    6. Return [candidate] if valid, else []
+
+    Returns:
+        List with 0 or 1 COLOR_PERM closure
+        Empty list if not bijective or gates fail or shapes don't match
+    """
+    from .closure_engine import preserves_y, compatible_to_y
+
+    # SHAPE GUARD: Skip if any train pair has different shapes
+    for x, y in train:
+        if x.shape != y.shape:
+            return []  # Shape-changing task, skip COLOR_PERM
+
+    # Step 1: Build color mapping from all train pairs
+    color_map = {}  # x_color -> y_color
+
+    for x, y in train:
+        H, W = x.shape
+        for r in range(H):
+            for c in range(W):
+                x_c = int(x[r, c])
+                y_c = int(y[r, c])
+
+                if x_c in color_map:
+                    # Check consistency
+                    if color_map[x_c] != y_c:
+                        return []  # Contradiction
+                else:
+                    color_map[x_c] = y_c
+
+    # Step 2: Ensure bijective (no two x_colors map to same y_color)
+    used_y_colors = list(color_map.values())
+    if len(set(used_y_colors)) != len(used_y_colors):
+        return []  # Not bijective
+
+    # Step 3: Build candidate closure
+    candidate = COLOR_PERM_Closure(
+        f"COLOR_PERM[perm={color_map}]",
+        {"perm": color_map}
+    )
+
+    # Step 4: Check composition-safe gates
+    if preserves_y(candidate, train) and compatible_to_y(candidate, train):
+        return [candidate]
+
+    return []
+
+
+# ==============================================================================
+# NX-UNSTICK: RECOLOR_ON_MASK
+# ==============================================================================
+
+class RECOLOR_ON_MASK_Closure(Closure):
+    """
+    Recolor pixels matching template to target strategy.
+
+    params = {
+        "template": str,      # "NONZERO"|"BACKGROUND"|"NOT_LARGEST"
+        "template_params": dict,
+        "strategy": str,      # "CONST"|"MODE_ON_MASK"
+        "strategy_params": dict,
+        "bg": int | None
+    }
+
+    Law: For pixels where template(x) is True, constrain to strategy(x, template(x))
+    """
+
+    def apply(self, U: SetValuedGrid, x_input: Grid) -> SetValuedGrid:
+        """
+        Apply recolor constraint (intersect only).
+
+        Algorithm:
+        1. Compute template mask T from x_input
+        2. Compute target color from strategy + x_input
+        3. For each cell (r,c):
+           - If T[r,c]: intersect U[r,c] with {target_color}
+           - Else: no change
+
+        Returns U_new (monotone, shrinking, deterministic)
+        """
+        template = self.params["template"]
+        template_params = self.params.get("template_params", {})
+        strategy = self.params["strategy"]
+        strategy_params = self.params.get("strategy_params", {})
+        bg = self.params.get("bg")
+
+        # Infer bg if None
+        if bg is None:
+            bg = infer_bg_from_border(x_input)
+
+        # Compute template mask
+        T = _compute_template_mask(x_input, template, template_params, bg)
+
+        # Compute target color
+        target_color = _compute_target_color(x_input, T, strategy, strategy_params, bg)
+
+        # Apply mask
+        U_new = U.copy()
+        target_mask = color_to_mask(target_color)
+
+        H, W = x_input.shape
+        for r in range(H):
+            for c in range(W):
+                if T[r, c]:
+                    U_new.intersect(r, c, target_mask)
+
+        return U_new
+
+
+def _compute_template_mask(x: Grid, template: str, params: dict, bg: int) -> np.ndarray:
+    """
+    Compute boolean mask for template.
+
+    Templates:
+    - NONZERO: mask = (x != bg)
+    - BACKGROUND: mask = (x == bg)
+    - NOT_LARGEST: mask = (not in largest component)
+
+    Returns:
+        Boolean mask (H×W array)
+    """
+    H, W = x.shape
+
+    if template == "NONZERO":
+        return (x != bg)
+
+    elif template == "BACKGROUND":
+        return (x == bg)
+
+    elif template == "NOT_LARGEST":
+        objs = components(x, bg=bg)
+        if not objs:
+            # No components - all pixels are background
+            return np.ones((H, W), dtype=bool)
+
+        # Find largest component
+        largest = max(objs, key=lambda o: (o.size, -o.bbox[0], -o.bbox[1]))
+        largest_pixels = set(largest.pixels)
+
+        # Mask is True where NOT in largest
+        mask = np.ones((H, W), dtype=bool)
+        for r, c in largest_pixels:
+            mask[r, c] = False
+
+        return mask
+
+    else:
+        raise ValueError(f"Unknown template: {template}")
+
+
+def _compute_target_color(x: Grid, T: np.ndarray, strategy: str, params: dict, bg: int) -> int:
+    """
+    Compute target color for recoloring.
+
+    Strategies:
+    - CONST: target = params["c"]
+    - MODE_ON_MASK: target = most frequent color in x where T is True
+
+    Returns:
+        Target color (int 0-9)
+    """
+    if strategy == "CONST":
+        return int(params["c"])
+
+    elif strategy == "MODE_ON_MASK":
+        # Get all colors where mask is True
+        colors_on_mask = []
+        H, W = x.shape
+        for r in range(H):
+            for c in range(W):
+                if T[r, c]:
+                    colors_on_mask.append(int(x[r, c]))
+
+        if not colors_on_mask:
+            # Empty mask - fallback to bg
+            return bg
+
+        # Mode with deterministic tie-breaking (lowest color)
+        counts = Counter(colors_on_mask)
+        mode_color = min(counts.keys(), key=lambda c: (-counts[c], c))
+        return int(mode_color)
+
+    else:
+        raise ValueError(f"Unknown strategy: {strategy}")
+
+
+def unify_RECOLOR_ON_MASK(train: List[Tuple[Grid, Grid]]) -> List[Closure]:
+    """
+    Unifier for RECOLOR_ON_MASK (composition-safe).
+
+    Algorithm:
+    1. Check for shape mismatches (skip shape-changing tasks)
+    2. Enumerate templates: NONZERO, BACKGROUND, NOT_LARGEST
+    3. For each template, check if template(x) matches residual mask M=(x!=y)
+    4. If yes, enumerate strategies: CONST(0-9), MODE_ON_MASK
+    5. Check if strategy produces exactly y's colors on M
+    6. Build candidate; check preserves_y + compatible_to_y
+    7. Return list of valid closures
+
+    Returns:
+        List of RECOLOR_ON_MASK closures (0..N candidates)
+        Empty list if no template/strategy works or shapes don't match
+    """
+    from .closure_engine import preserves_y, compatible_to_y
+
+    # SHAPE GUARD: Skip if any train pair has different shapes
+    for x, y in train:
+        if x.shape != y.shape:
+            return []  # Shape-changing task, skip RECOLOR_ON_MASK
+
+    valid = []
+
+    # Enumerate templates
+    templates = [
+        ("NONZERO", {}),
+        ("BACKGROUND", {}),
+        ("NOT_LARGEST", {})
+    ]
+
+    # Try bg=None first, then explicit bgs
+    bg_candidates = [None] + list(range(10))
+
+    for bg_cand in bg_candidates:
+        for template_name, template_params in templates:
+            # Check if template matches residual mask for ALL train pairs
+            template_matches = True
+            inferred_bg = bg_cand  # Will be set per-input if None
+
+            for x, y in train:
+                # Infer bg if None
+                if bg_cand is None:
+                    inferred_bg = infer_bg_from_border(x)
+                else:
+                    inferred_bg = bg_cand
+
+                # Compute template mask
+                try:
+                    T = _compute_template_mask(x, template_name, template_params, inferred_bg)
+                except:
+                    template_matches = False
+                    break
+
+                # Compute residual mask
+                M = (x != y)
+
+                # Check if template matches residual
+                if not np.array_equal(T, M):
+                    template_matches = False
+                    break
+
+            if not template_matches:
+                continue
+
+            # Template matches! Now enumerate strategies
+            strategies = [("MODE_ON_MASK", {})]
+            for c in range(10):
+                strategies.append(("CONST", {"c": c}))
+
+            for strategy_name, strategy_params in strategies:
+                # Check if strategy produces correct colors for ALL train pairs
+                strategy_works = True
+
+                for x, y in train:
+                    # Infer bg if None
+                    if bg_cand is None:
+                        inferred_bg = infer_bg_from_border(x)
+                    else:
+                        inferred_bg = bg_cand
+
+                    # Compute template mask
+                    T = _compute_template_mask(x, template_name, template_params, inferred_bg)
+
+                    # Compute target color
+                    try:
+                        target_color = _compute_target_color(x, T, strategy_name, strategy_params, inferred_bg)
+                    except:
+                        strategy_works = False
+                        break
+
+                    # Check if target_color matches y on mask
+                    H, W = x.shape
+                    for r in range(H):
+                        for c in range(W):
+                            if T[r, c]:
+                                if int(y[r, c]) != target_color:
+                                    strategy_works = False
+                                    break
+                        if not strategy_works:
+                            break
+
+                    if not strategy_works:
+                        break
+
+                if not strategy_works:
+                    continue
+
+                # Build candidate closure
+                candidate = RECOLOR_ON_MASK_Closure(
+                    f"RECOLOR_ON_MASK[template={template_name},strategy={strategy_name},bg={bg_cand}]",
+                    {
+                        "template": template_name,
+                        "template_params": template_params,
+                        "strategy": strategy_name,
+                        "strategy_params": strategy_params,
+                        "bg": bg_cand
+                    }
+                )
+
+                # Check composition-safe gates
+                if preserves_y(candidate, train) and compatible_to_y(candidate, train):
+                    valid.append(candidate)
+
+    return valid
