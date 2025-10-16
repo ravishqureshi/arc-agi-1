@@ -211,7 +211,12 @@ def solve_with_beam(inst: ARCInstance, max_depth=6, beam_size=160):
 
 def autobuild_closures(train):
     """
-    Try all unifiers and return closures that produce exact output on train.
+    Try all unifiers and return closures that compose to exact output on train.
+
+    Uses composition-safe gates + greedy back-off:
+    1. Collect all candidates that pass individual gates (preserves_y + compatible_to_y)
+    2. Greedily add candidates; verify composed set with verify_closures_on_train
+    3. If composition fails, back off (drop last candidate) and continue
 
     Ordered by cost (cheap → expensive).
     """
@@ -222,21 +227,29 @@ def autobuild_closures(train):
         unify_AXIS_PROJECTION,
         unify_SYMMETRY_COMPLETION
     )
+    from .closure_engine import verify_closures_on_train
 
-    closures = []
+    # Collect all candidates that pass individual composition-safe gates
+    candidates = []
     # B1: KEEP_LARGEST_COMPONENT
-    closures += unify_KEEP_LARGEST(train)
+    candidates += unify_KEEP_LARGEST(train)
     # B2: OUTLINE_OBJECTS
-    closures += unify_OUTLINE_OBJECTS(train)
+    candidates += unify_OUTLINE_OBJECTS(train)
     # M2.1: OPEN_CLOSE
-    closures += unify_OPEN_CLOSE(train)
+    candidates += unify_OPEN_CLOSE(train)
     # M2.2: AXIS_PROJECTION
-    closures += unify_AXIS_PROJECTION(train)
+    candidates += unify_AXIS_PROJECTION(train)
     # M2.3: SYMMETRY_COMPLETION
-    closures += unify_SYMMETRY_COMPLETION(train)
-    # TODO: Add more closure families as they're implemented
+    candidates += unify_SYMMETRY_COMPLETION(train)
 
-    return closures
+    # Greedy composition verification with back-off
+    kept = []
+    for c in candidates:
+        kept.append(c)
+        if not verify_closures_on_train(kept, train):
+            kept.pop()  # Back off: drop last candidate
+
+    return kept
 
 
 def solve_with_closures(inst: ARCInstance):
@@ -317,9 +330,10 @@ def solve_with_closures(inst: ARCInstance):
                 bg = closure.params["bg"]
                 break
 
-        # If no closure defines bg, fail loudly
+        # BLOCKER FIX: If bg is None (per-input inference), infer from current input
         if bg is None:
-            raise ValueError(f"No closure defines 'bg' parameter. Closures: {[c.name for c in closures]}")
+            from .closures import infer_bg_from_border
+            bg = infer_bg_from_border(x_test)
 
         y_pred = U_final.to_grid_deterministic(fallback='lowest', bg=bg)
         preds.append(y_pred)
@@ -337,8 +351,12 @@ def solve_with_closures(inst: ARCInstance):
         if "bg" in closure.params:
             bg = closure.params["bg"]
             break
+
+    # BLOCKER FIX: If bg is None (per-input inference), infer from first train input
+    # (For invariants, we use first train input as representative)
     if bg is None:
-        raise ValueError(f"No closure defines 'bg' parameter for invariants. Closures: {[c.name for c in closures]}")
+        from .closures import infer_bg_from_border
+        bg = infer_bg_from_border(inst.train[0][0])
 
     for x, y in inst.train:
         palette_deltas.append(compute_palette_delta(x, y))

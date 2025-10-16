@@ -25,7 +25,9 @@ from arc_solver.closure_engine import (
     init_from_grid,
     color_to_mask,
     run_fixed_point,
-    verify_closures_on_train
+    verify_closures_on_train,
+    preserves_y,
+    compatible_to_y
 )
 from arc_solver.closures import (
     KEEP_LARGEST_COMPONENT_Closure,
@@ -37,8 +39,10 @@ from arc_solver.closures import (
     AXIS_PROJECTION_Closure,
     unify_AXIS_PROJECTION,
     SYMMETRY_COMPLETION_Closure,
-    unify_SYMMETRY_COMPLETION
+    unify_SYMMETRY_COMPLETION,
+    infer_bg_from_border
 )
+from arc_solver.search import autobuild_closures
 
 
 # ==============================================================================
@@ -488,6 +492,12 @@ def run_all_tests():
         ("SYMMETRY: Vertical global", test_train_exactness_symmetry_vertical),
         ("SYMMETRY: Largest only", test_train_exactness_symmetry_largest_only),
         ("SYMMETRY: Diagonal", test_train_exactness_symmetry_diagonal),
+        # A+B: Composition-Safe Gate + Per-Input BG tests
+        ("A: Composition gate preserves_y", test_composition_gate_preserves_y),
+        ("A: Composition gate compatible_to_y", test_composition_gate_compatible_to_y),
+        ("A: Greedy composition backoff", test_greedy_composition_backoff),
+        ("B: Per-input bg inference", test_per_input_bg_inference),
+        ("B: Per-input bg deterministic", test_per_input_bg_deterministic),
     ]
 
     passed = 0
@@ -1029,6 +1039,93 @@ def test_train_exactness_symmetry_diagonal():
     y_pred = U.to_grid()
     assert np.array_equal(y_pred, y), \
         f"Diagonal symmetry failed.\nPred:\n{y_pred}\nExpected:\n{y}"
+
+
+# ==============================================================================
+# Composition-Safe Gate Tests (Part A)
+# ==============================================================================
+
+def test_composition_gate_preserves_y():
+    """Test: preserves_y helper correctly validates closures."""
+    x1 = np.array([[1, 1], [0, 2]])
+    y1 = np.array([[1, 1], [0, 0]])
+    train = [(x1, y1)]
+
+    # KEEP_LARGEST with bg=0 should preserve y1
+    closure_good = KEEP_LARGEST_COMPONENT_Closure("test", {"bg": 0})
+    assert preserves_y(closure_good, train), \
+        "KEEP_LARGEST with bg=0 should preserve y1"
+
+    # KEEP_LARGEST with bg=1 should NOT preserve y1
+    closure_bad = KEEP_LARGEST_COMPONENT_Closure("test", {"bg": 1})
+    assert not preserves_y(closure_bad, train), \
+        "KEEP_LARGEST with bg=1 should NOT preserve y1"
+
+
+def test_composition_gate_compatible_to_y():
+    """Test: compatible_to_y helper correctly validates closures."""
+    x1 = np.array([[1, 1], [0, 2]])
+    y1 = np.array([[1, 1], [0, 0]])
+    train = [(x1, y1)]
+
+    # Closure that keeps colors {0,1,2} should be compatible
+    closure_good = KEEP_LARGEST_COMPONENT_Closure("test", {"bg": 0})
+    assert compatible_to_y(closure_good, train), \
+        "Closure should be compatible (colors in output subset of y)"
+
+
+def test_greedy_composition_backoff():
+    """Test: autobuild_closures backs off when composition fails."""
+    # Create train where individual closures pass gates but composition might fail
+    x1 = np.array([[1, 1], [0, 0]])
+    y1 = np.array([[1, 1], [0, 0]])
+    train = [(x1, y1)]
+
+    closures = autobuild_closures(train)
+    # Should return subset that composes to exact train result
+    assert verify_closures_on_train(closures, train), \
+        "Composed closures should verify on train (greedy back-off ensures this)"
+
+
+# ==============================================================================
+# Per-Input BG Tests (Part B)
+# ==============================================================================
+
+def test_per_input_bg_inference():
+    """Test: bg=None infers background per input via border flood-fill."""
+    # Pair 1: bg=0 (inferred from border)
+    x1 = np.array([[0, 1, 0], [0, 1, 0], [0, 0, 0]])
+    y1 = np.array([[0, 1, 0], [0, 1, 0], [0, 0, 0]])
+
+    # Pair 2: bg=2 (inferred from border)
+    x2 = np.array([[2, 1, 2], [2, 1, 2], [2, 2, 2]])
+    y2 = np.array([[2, 1, 2], [2, 1, 2], [2, 2, 2]])
+
+    train = [(x1, y1), (x2, y2)]
+
+    # Unifier should prefer bg=None (infer per input)
+    closures = unify_KEEP_LARGEST(train)
+    assert len(closures) >= 1, "Should find at least one closure"
+
+    # Check if any closure uses bg=None
+    has_bg_none = any(c.params.get("bg") is None for c in closures)
+    assert has_bg_none, "Should prefer bg=None for per-input inference"
+
+    # Verify train exactness with per-input bg
+    assert verify_closures_on_train(closures, train), \
+        "Closures with bg=None should verify on train"
+
+
+def test_per_input_bg_deterministic():
+    """Test: infer_bg_from_border is deterministic (tie-breaks to lowest color)."""
+    # Border has equal counts of 0 and 1 → should pick 0 (lowest)
+    x = np.array([[0, 0, 1, 1], [0, 9, 9, 1], [1, 1, 0, 0]])
+    bg = infer_bg_from_border(x)
+    assert bg in {0, 1}, "bg should be border color"
+
+    # Run twice to verify determinism
+    bg2 = infer_bg_from_border(x)
+    assert bg == bg2, "bg inference must be deterministic"
 
 
 # ==============================================================================

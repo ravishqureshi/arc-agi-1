@@ -1,9 +1,9 @@
 # ARC-AGI Test Coverage Report
 
-**Run**: M2.3 SYMMETRY_COMPLETION
+**Run**: A+B Composition-Safe Unifiers + Per-Input Background
 **Date**: 2025-10-15
 **Dataset**: `data/arc-agi_training_challenges.json` (1000 tasks)
-**Output**: `runs/20251015_m2.3/`
+**Output**: `runs/20251015_AB/`
 
 ---
 
@@ -21,7 +21,7 @@
 ## Test Execution Stats
 
 **Tests Ran**: 1000/1000 tasks (100% completion)
-**Tests Passed**: 6 tasks
+**Tests Passed**: 6 tasks (all match ground truth)
 **Tests Failed**: 994 tasks
 
 **Implemented Closures**: 5 families
@@ -29,7 +29,12 @@
 - OUTLINE_OBJECTS (M1.3)
 - OPEN_CLOSE (M2.1)
 - AXIS_PROJECTION (M2.2)
-- SYMMETRY_COMPLETION (M2.3) ← **NEW**
+- SYMMETRY_COMPLETION (M2.3)
+
+**New Infrastructure** (A+B):
+- Composition-safe unifier gates (preserves_y + compatible_to_y)
+- Per-input background inference via border flood-fill
+- Greedy composition with back-off in autobuild_closures
 
 ---
 
@@ -40,32 +45,34 @@
 **Closure Applied:**
 ```json
 {
-  "name": "OUTLINE_OBJECTS[mode=outer,scope=all,bg=0]",
-  "params": {"bg": 0, "mode": "outer", "scope": "all"}
+  "name": "OUTLINE_OBJECTS[mode=outer,scope=all,bg=None]",
+  "params": {"bg": null, "mode": "outer", "scope": "all"}
 }
 ```
 
 **Fixed-Point Stats:**
 - Iterations: 2
 - Multi-valued cells: 0 (exact solution)
+- **Per-Input BG**: ✓ Uses border flood-fill (was bg=0 before A+B)
 
 **Pattern**: Extract outer outline of all objects (4-connectivity), clear interior pixels to background.
 
 ---
 
-### 2. `496994bd.json` - SYMMETRY_COMPLETION ← **NEW in M2.3**
+### 2. `496994bd.json` - SYMMETRY_COMPLETION
 
 **Closure Applied:**
 ```json
 {
-  "name": "SYMMETRY_COMPLETION[axis=h,scope=global,bg=0]",
-  "params": {"axis": "h", "scope": "global", "bg": 0}
+  "name": "SYMMETRY_COMPLETION[axis=h,scope=global,bg=None]",
+  "params": {"axis": "h", "scope": "global", "bg": null}
 }
 ```
 
 **Fixed-Point Stats:**
 - Iterations: 2
 - Multi-valued cells: 0 (exact solution)
+- **Per-Input BG**: ✓ Uses border flood-fill (was bg=0 before A+B)
 
 **Pattern**: Horizontal reflection (mirror across horizontal center) and union with original to complete symmetric pattern.
 
@@ -84,8 +91,9 @@
 **Fixed-Point Stats:**
 - Iterations: 2
 - Multi-valued cells: 0 (exact solution)
+- **Explicit BG**: Still uses bg=8 (per-input inference not needed)
 
-**Pattern**: CLOSE operation (DILATE then ERODE) fills small gaps in foreground objects (bg=8).
+**Pattern**: CLOSE operation (DILATE then ERODE) fills small gaps in foreground objects.
 
 ---
 
@@ -102,12 +110,13 @@
 **Fixed-Point Stats:**
 - Iterations: 2
 - Multi-valued cells: 0 (exact solution)
+- **Explicit BG**: Still uses bg=5 (per-input inference not needed)
 
 **Pattern**: Keep only largest connected component, remove all others.
 
 ---
 
-### 5. `b8825c91.json` - SYMMETRY_COMPLETION ← **NEW in M2.3**
+### 5. `b8825c91.json` - SYMMETRY_COMPLETION
 
 **Closure Applied:**
 ```json
@@ -120,24 +129,26 @@
 **Fixed-Point Stats:**
 - Iterations: 2
 - Multi-valued cells: 0 (exact solution)
+- **Explicit BG**: Still uses bg=4 (per-input inference not needed)
 
 **Pattern**: Vertical reflection (mirror across vertical center) and union with original to complete symmetric pattern.
 
 ---
 
-### 6. `f25ffba3.json` - SYMMETRY_COMPLETION ← **NEW in M2.3**
+### 6. `f25ffba3.json` - SYMMETRY_COMPLETION
 
 **Closure Applied:**
 ```json
 {
-  "name": "SYMMETRY_COMPLETION[axis=h,scope=global,bg=0]",
-  "params": {"axis": "h", "scope": "global", "bg": 0}
+  "name": "SYMMETRY_COMPLETION[axis=h,scope=global,bg=None]",
+  "params": {"axis": "h", "scope": "global", "bg": null}
 }
 ```
 
 **Fixed-Point Stats:**
 - Iterations: 2
 - Multi-valued cells: 0 (exact solution)
+- **Per-Input BG**: ✓ Uses border flood-fill (was bg=0 before A+B)
 
 **Pattern**: Horizontal reflection (mirror across horizontal center) and union with original to complete symmetric pattern.
 
@@ -146,9 +157,9 @@
 ## Failed Tasks (994)
 
 **Reasons for failure:**
-- No closure unifies across all train pairs
+- No closure (or composition) unifies across all train pairs
 - Pattern requires closures not yet implemented (M3-M4)
-- Complex multi-step transformations beyond single-closure composition
+- Complex multi-step transformations beyond current closure set
 
 **Sample failed tasks** (showing status and fp stats):
 
@@ -158,7 +169,7 @@
 00d62c1b.json: failed, fp.iters=0, fp.cells_multi=-1
 ```
 
-**Note**: Failed tasks have `fp.iters=0` because no closures unified. This is expected behavior—unifiers correctly reject when train exactness cannot be proven.
+**Note**: Failed tasks have `fp.iters=0` because no closures (or compositions) unified. This is expected behavior—unifiers correctly reject when train exactness cannot be proven.
 
 ---
 
@@ -177,28 +188,39 @@ No tasks reached fixed-point with multi-valued cells remaining. All closures eit
 | Closure | Solved | Notes |
 |---------|--------|-------|
 | KEEP_LARGEST_COMPONENT | 1 | Handles noise removal patterns |
-| OUTLINE_OBJECTS | 1 | Handles outline extraction patterns |
+| OUTLINE_OBJECTS | 1 | Handles outline extraction patterns (now uses bg=None) |
 | OPEN_CLOSE | 1 | Fills gaps/removes spurs via morphology |
 | AXIS_PROJECTION | 0 | Extends pixels along axis to border (no matches yet) |
-| SYMMETRY_COMPLETION | 3 | Completes symmetric patterns via reflection |
-| **Total Unique** | 6 | No overlap |
+| SYMMETRY_COMPLETION | 3 | Completes symmetric patterns via reflection (2 now use bg=None) |
+| **Total Unique** | 6 | No overlap, **no composition yet** |
 
-### M2.3 Contribution
+### A+B Contribution
 
-**New Solved**: +3 tasks (496994bd.json, b8825c91.json, f25ffba3.json)
-**Coverage Increase**: 0.3% → 0.6% (+100% relative improvement)
+**New Solved**: 0 tasks (coverage unchanged at 0.6%)
+**Infrastructure Improvements**:
+- **Part A (Composition-Safe Gates)**: Infrastructure ready for multi-closure solutions
+  - `preserves_y()`: Validates closure doesn't contradict output
+  - `compatible_to_y()`: Validates closure doesn't introduce spurious colors
+  - Greedy composition with back-off in `autobuild_closures`
+- **Part B (Per-Input BG)**: 3/6 tasks now use bg=None (more flexible)
+  - Border flood-fill deterministic (majority vote + tie-break to lowest color)
+  - Reduces incidental parameters (bg=None vs explicit bg values)
 
-**Symmetry Breakdown**:
-- Horizontal (axis=h): 2 tasks (496994bd, f25ffba3)
-- Vertical (axis=v): 1 task (b8825c91)
-- Diagonal axes (diag/anti): 0 tasks (no matches yet)
-- Scope variants: All 3 used global scope
+**Why No Coverage Increase?**
+- All 6 solvable tasks can be solved with single closures
+- No training tasks require composition of multiple closures yet
+- Future closures (M3-M4) expected to benefit from composition infrastructure
+
+**Per-Input BG Usage**:
+- Tasks using bg=None: 3 (4347f46a, 496994bd, f25ffba3)
+- Tasks using explicit bg: 3 (6f8cd79b, 9565186b, b8825c91)
+- Border flood-fill working correctly for all bg=None cases
 
 ---
 
 ## Receipts Analysis
 
-**Sample receipts.jsonl entry** (M2.3 solved task):
+**Sample receipts.jsonl entry** (A+B with bg=None):
 
 ```json
 {
@@ -206,8 +228,8 @@ No tasks reached fixed-point with multi-valued cells remaining. All closures eit
   "status": "solved",
   "closures": [
     {
-      "name": "SYMMETRY_COMPLETION[axis=h,scope=global,bg=0]",
-      "params": {"axis": "h", "scope": "global", "bg": 0}
+      "name": "SYMMETRY_COMPLETION[axis=h,scope=global,bg=None]",
+      "params": {"axis": "h", "scope": "global", "bg": null}
     }
   ],
   "fp": {"iters": 2, "cells_multi": 0},
@@ -225,8 +247,8 @@ No tasks reached fixed-point with multi-valued cells remaining. All closures eit
 
 All receipts include:
 - Task ID
-- Status (solved/under_constrained/failed)
-- Closure list with parameters
+- Status (solved/failed)
+- Closure list with parameters (bg can be null for per-input inference)
 - Fixed-point statistics
 - Timing (unify + total + fp)
 - Hashes (task + closure set)
@@ -236,7 +258,7 @@ All receipts include:
 
 ## Validation
 
-**Schema Validation**: Run `python scripts/submission_validator.py runs/20251015_m2.3/predictions.json`
+**Schema Validation**: Run `python scripts/submission_validator.py runs/20251015_AB/predictions.json`
 
 **Determinism Check**: Run `bash scripts/determinism.sh data/arc-agi_training_challenges.json`
 
@@ -249,20 +271,19 @@ All receipts include:
 
 ## Next Steps
 
-1. **Complete M2** - M2 milestone complete (3 closures implemented)
-2. **Continue M3** (MOD_PATTERN, DIAGONAL_REPEAT) for periodic/diagonal patterns
-3. **Continue M4** (TILING, COPY_BY_DELTAS) for final baseline submission
-4. **Run on evaluation set** (`data/arc-agi_evaluation_challenges.json`, 120 tasks) for final validation
-5. **Monitor receipts** for under-constrained cases (multi-valued cells at fixed-point)
+1. **Implement M3-M4** - Additional closure families likely to benefit from composition infrastructure
+2. **Monitor composition usage** - Track when multiple closures are needed
+3. **Run on evaluation set** (`data/arc-agi_evaluation_challenges.json`, 120 tasks) for final validation
+4. **Optimize unifiers** - Potential to expand candidate sets with composition-safe gates
 
 ---
 
 ## Files
 
-- **Predictions**: `runs/20251015_m2.3/predictions.json`
-- **Receipts**: `runs/20251015_m2.3/receipts.jsonl`
+- **Predictions**: `runs/20251015_AB/predictions.json`
+- **Receipts**: `runs/20251015_AB/receipts.jsonl`
 - **This Report**: `docs/TEST_COVERAGE.md`
 
 ---
 
-**Status**: M2 complete (OPEN_CLOSE + AXIS_PROJECTION + SYMMETRY_COMPLETION). Coverage: 6/1000 (0.6%). Ready for M3.
+**Status**: A+B complete. Infrastructure upgraded for composition + per-input BG. Coverage: 6/1000 (0.6%). Ready for M3-M4.

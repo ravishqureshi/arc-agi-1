@@ -297,7 +297,7 @@ If you kept everything in current files, skip. If you folderized closures later,
 
 ---
 
-### M2 — OPEN/CLOSE + AXIS_PROJECTION + SYMMETRY
+### M2 — OPEN/CLOSE + AXIS_PROJECTION + SYMMETRY ✅ COMPLETED
 Breakdown for **M2** only. Same style as M1, not over-broken, with exact names, where to add, unifier scope, integration order, tiny tests, and acceptance. No step depends on future milestones.
 
 #### M2.1 — Closure: OPEN/CLOSE (k=1) ✅ COMPLETED
@@ -407,7 +407,7 @@ def unify_AXIS_PROJECTION(train) -> list[Closure]:
 
 ---
 
-#### M2.3 — Closure: SYMMETRY_COMPLETION
+#### M2.3 — Closure: SYMMETRY_COMPLETION ✅ COMPLETED
 
 **Law (one-liner)**
 Reflect content across an axis (v | h | main-diag | anti-diag) and **union** with original; result narrows U to the union colors at reflected pairs.
@@ -455,7 +455,7 @@ def unify_SYMMETRY_COMPLETION(train) -> list[Closure]:
 
 ---
 
-#### M2.4 — Registration & Smoke
+#### M2.4 — Registration & Smoke ✅ COMPLETED
 
 **What**
 Ensure the three unifiers are in order and solve path runs.
@@ -482,3 +482,281 @@ def autobuild_closures(train):
 * `solve_with_closures` returns closures when any unifier fits; runs without touching beam.
 
 ---
+ ### Increase coverage Work order
+ #### Work-Order
+
+Milestone: A+B — Composition-Safe Unifiers + Per-Input Background (BG)  ✅ COMPLETED
+Objective:
+1) **A. Composition-Safe Unifier Gate** — change all existing unifiers to accept closures that are **solution-preserving and compatible** (not necessarily sufficient alone), then verify **train exactness on the collected set** at the end of `autobuild_closures`.  
+2) **B. Per-Input BG** — remove global `bg` unification; closures infer **background per input** deterministically (border flood-fill) inside `apply`. This loosens incidental params without violating “observer = observed” (the method is unified; values are derived from x).
+
+Scope (touch only what follows):
+- Families already implemented: **KEEP_LARGEST_COMPONENT**, **OUTLINE_OBJECTS**, **OPEN_CLOSE**, **AXIS_PROJECTION**, **SYMMETRY_COMPLETION**.
+- No new families in this WO.
+
+---
+
+## Files to Edit
+
+- `src/arc_solver/closure_engine.py`
+  - Add small helpers used by all unifiers:
+    ```python
+    def preserves_y(closure, train) -> bool: ...
+    def compatible_to_y(closure, train) -> bool: ...
+    # keeps: verify_closures_on_train(closures, train)
+    ```
+- `src/arc_solver/closures.py`
+  - Update each unifier to use the **new gate** (see “Unifier Gate Changes”).
+  - Update each closure to support **per-input BG**:
+    - If `params` includes `"bg"` → allow `"bg": None` and infer at runtime inside `apply(x_input)` via border flood-fill.
+- `src/arc_solver/search.py`
+  - Change `autobuild_closures(train)` to:
+    1) Collect all **candidate** closures that pass `preserves_y` **and** `compatible_to_y`.
+    2) Run `verify_closures_on_train(collected, train)`.
+    3) If it fails, **greedy back-off**: drop last added candidate(s) until it passes or return best passing subset (even empty).
+- `tests/test_closures_minimal.py`
+  - Add/adjust tiny property tests to reflect **per-input BG** and **composition** verification.
+
+---
+
+### A) Unifier Gate Changes (for all implemented families)
+- **Replace “exact-alone” acceptance:**
+  - ❌ Old: accept `candidate` iff `verify_closures_on_train([candidate], train)` is True.
+- **With composition-safe gate:**
+  - ✅ New: accept `candidate` iff:
+    1) `preserves_y(candidate, train)` → for all pairs, `candidate.apply(singleton(y)) == singleton(y)`.
+    2) `compatible_to_y(candidate, train)` → for all pairs, `candidate.apply(singleton(x))` **does not introduce colors** absent in `y` (and optionally is pointwise ≤ `singleton(y)`).
+  - Return `[candidate]` if both pass; `[]` otherwise.
+- **Final exactness at set level only**:
+  - `autobuild_closures(train)` composes all accepted candidates and calls `verify_closures_on_train(collected, train)`; if it fails, back-off greedily.
+
+### B) Per-Input BG (for closures that used a unified bg)
+- In closure `params`, allow `"bg": None`.
+- In `apply(self, U)`:
+  - Compute BG **per input** via border flood-fill (deterministic).
+  - Use this inferred BG for masks (largest, outline, morphology, projection, symmetry).
+- In unifiers:
+  - Do **not** unify a single `bg` across pairs; prefer `bg=None` and rely on per-input inference inside `apply`.
+
+---
+
+## Required Signatures / Pseudocode
+
+**closure_engine.py**
+```python
+def preserves_y(closure, train) -> bool:
+    for x, y in train:
+        U = init_from_grid(y)     # singleton(y)
+        U2 = closure.apply(U)     # must not contradict y
+        if not U2.equals(U):      # exact equality
+            return False
+    return True
+
+def compatible_to_y(closure, train) -> bool:
+    for x, y in train:
+        Ux = init_from_grid(x)
+        Uy = init_from_grid(y)
+        Ux2 = closure.apply(Ux)
+        # Option A (strict color subset):
+        if not Ux2.colors_subset_of(Uy):
+            return False
+        # (Optional) monotone-toward-y guard can be added if needed
+    return True
+search.py::autobuild_closures(train)
+
+python
+Copy code
+def autobuild_closures(train):
+    candidates = []
+    candidates += unify_KEEP_LARGEST(train)
+    candidates += unify_OUTLINE_OBJECTS(train)
+    candidates += unify_OPEN_CLOSE(train)
+    candidates += unify_AXIS_PROJECTION(train)
+    candidates += unify_SYMMETRY_COMPLETION(train)
+
+    # Compose-then-verify gate
+    kept = []
+    for c in candidates:
+        kept.append(c)
+        if not verify_closures_on_train(kept, train):
+            kept.pop()  # greedy back-off
+
+    return kept
+closures.py — example param & bg inference
+
+python
+Copy code
+class OUTLINE_OBJECTS_Closure(Closure):
+    # params = {"mode":"outer", "scope":"largest|all", "bg": None}
+    def apply(self, U):
+        x = self.x_input
+        bg = infer_bg_from_border(x)  # per-input
+        outline_mask = compute_outline(x, bg, scope=self.params["scope"])
+        # build per-cell allowed set; intersect-only
+        return intersect_with_mask(U, outline_mask)
+Data-Use Rule (training-only induction)
+Allowed in unifiers/closures/tests: data/arc-agi_training_challenges.json (+ optional ..._training_solutions.json for local verify).
+
+Forbidden in unifiers/closures/tests: any data/arc-agi_evaluation_* or data/arc-agi_test_*.
+
+Submission runner may load evaluation/test to produce predictions, never to induce params.
+
+Reviewers to Run
+anti-hardcode-implementation-auditor-reviewer
+
+math-closure-soundness-reviewer
+
+submission-determinism-reviewer
+
+(Each returns exactly one review file.)
+
+Verify Commands
+bash
+Copy code
+python scripts/run_public.py --arc_public_dir <FILL_THIS> --out runs/<DATE>
+bash scripts/determinism.sh <FILL_THIS>
+python scripts/submission_validator.py runs/<DATE>/predictions.json
+Acceptance
+All targeted unifiers now use the composition-safe gate (preserves_y & compatible_to_y), and autobuild_closures verifies exactness on the set (with greedy back-off).
+Closures that used bg now support "bg": None and infer BG per input deterministically inside apply.
+Tiny tests updated and pass (shrinking; ≤2-pass idempotence; minimal minis).
+Determinism and schema validator pass on the specified ARC public dir.
+Receipts JSONL unchanged in format; coverage shows an uptick (more tasks solvable with composition).
+
+Here’s a tight, dependency-free breakdown for **M3**. It assumes you’ve finished **A+B** (composition-safe unifiers + per-input BG). No stubs, no future deps.
+
+---
+
+### M3 — MOD_PATTERN + DIAGONAL_REPEAT
+
+#### M3.1 — Closure: MOD_PATTERN (periodic mask, (p,q,anchor))
+
+**Law (one-liner)**
+Cells partitioned by congruence classes `((r−ar) mod p, (c−ac) mod q)` must take fixed color sets (derived from input only), producing the periodic pattern.
+
+**Files**
+
+* `src/arc_solver/closures.py` (add closure + unifier)
+* `tests/test_closures_minimal.py` (tiny tests)
+
+**Add**
+
+```python
+# closures.py
+class MOD_PATTERN_Closure(Closure):
+    # name = "MOD_PATTERN"
+    # params = {"p": int, "q": int, "anchor": (int,int), "class_map": Dict[(int,int), Set[int]]}
+    # apply(self, U): build periodic class masks from x_input & params; intersect-only
+
+def unify_MOD_PATTERN(train) -> list[Closure]:
+    # Anchors to try: {(0,0), bbox_corners(x), quadrant_origins(x)}
+    # Infer (p,q) by periodicity in x relative to y for each pair (composition-safe checks)
+    # Build class_map from input-derived colors; accept iff preserves_y && compatible_to_y on all pairs
+```
+
+**apply(U) — algorithm (intersect-only)**
+
+* From `x_input` and `(p,q,anchor)`, compute class index per cell; map each class to allowed colors (from input’s role/usage as indicated by train).
+* Build per-cell allowed set by class; return `U & mask`. Deterministic; ≤2-pass idempotent.
+
+**Unifier (composition-safe)**
+
+* Enumerate anchors; estimate `(p,q)` (small periods only, e.g., 2–6) by scanning residual structure.
+* Build `class_map` from **input** (e.g., dominant/unique color per class) so `T(y)==y` on all pairs; reject if not.
+* Return `[candidate]` when **preserves_y && compatible_to_y** on all pairs; else `[]`.
+
+**Integration**
+
+* In `src/arc_solver/search.py::autobuild_closures(train)` add **after SYMMETRY_COMPLETION**:
+  `closures += unify_MOD_PATTERN(train)`
+
+**Tiny tests**
+
+* 2×3 periodic dots with anchor (0,0).
+* Parity special case `(p,q)=(2,2)` acts as expected.
+* Shrinking + ≤2-pass idempotence + train mini exactness (with composition).
+
+**Acceptance**
+
+* Candidate passes preserves_y/compatible checks; set of closures reaches train exactness; LFP singletons on minis.
+
+---
+
+#### M3.2 — Closure: DIAGONAL_REPEAT (shift chain along Δ=(dr,dc), k steps)
+
+**Law (one-liner)**
+Repeat a template object/motif by shifting along a fixed diagonal step `Δ=(dr,dc)` for `k` steps; tie admissible colors along that chain.
+
+**Files**
+
+* `src/arc_solver/closures.py` (add closure + unifier)
+* `tests/test_closures_minimal.py`
+
+**Add**
+
+```python
+class DIAGONAL_REPEAT_Closure(Closure):
+    # name = "DIAGONAL_REPEAT"
+    # params = {"dr": int, "dc": int, "k": int, "template": TemplateSpec}
+    # apply(self, U): construct chains by shifting template along Δ; intersect-only
+
+def unify_DIAGONAL_REPEAT(train) -> list[Closure]:
+    # Detect Δ by matching shifted masks between input & (compatible) target structure per pair
+    # Infer k (small; e.g., 1–5) and a simple template (mask+color) from input only
+    # Accept iff preserves_y && compatible_to_y across all pairs
+```
+
+**apply(U) — algorithm (intersect-only)**
+
+* From `x_input` derive a **template mask** (e.g., smallest per-color object or motif region).
+* Generate positions `{template + t·Δ | t=0..k}` clipped to bounds; union their allowed colors; intersect U with that union.
+
+**Unifier (composition-safe)**
+
+* For each pair, compute candidate `Δ` by aligning a source mask to a target mask (exact shift).
+* Intersect Δ candidates across pairs; try small `k`.
+* Build template from input only; require **preserves_y && compatible_to_y** across pairs.
+* Return `[candidate]` or `[]`.
+
+**Integration**
+
+* In `autobuild_closures(train)` add **after MOD_PATTERN**:
+  `closures += unify_DIAGONAL_REPEAT(train)`
+
+**Tiny tests**
+
+* A 2-pixel diagonal repeated thrice `Δ=(1,1)`;
+* Anti diagonal `Δ=(1,−1)`;
+* Shrinking + ≤2-pass idempotence + train mini exactness (with composition).
+
+**Acceptance**
+
+* Candidate passes preserves/compatible; full set attains train exactness; minis converge.
+
+---
+
+#### M3.3 — Registration & Smoke
+
+**Do**
+
+```python
+def autobuild_closures(train):
+    closures = []
+    closures += unify_KEEP_LARGEST(train)           # M1
+    closures += unify_OUTLINE_OBJECTS(train)        # M1
+    closures += unify_OPEN_CLOSE(train)             # M2.1
+    closures += unify_AXIS_PROJECTION(train)        # M2.2
+    closures += unify_SYMMETRY_COMPLETION(train)    # M2.3
+    closures += unify_MOD_PATTERN(train)            # M3.1
+    closures += unify_DIAGONAL_REPEAT(train)        # M3.2
+    # Composition-safe verify already in place from A+B:
+    #   greedy keep if verify_closures_on_train(kept, train) passes
+    return kept_or_verified_list
+```
+
+**Acceptance**
+
+* `solve_with_closures` builds MOD_PATTERN and DIAGONAL_REPEAT when compatible; composition reaches train exactness where applicable; deterministic predictions and schema validator remain OK; receipts unchanged in shape.
+
+---
+

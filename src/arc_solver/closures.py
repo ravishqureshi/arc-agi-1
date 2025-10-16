@@ -9,9 +9,42 @@ Each closure:
 
 import numpy as np
 from typing import List, Tuple, Dict, Optional
+from collections import Counter
 from .types import Grid, Operator
 from .utils import equal, components
 from .closure_engine import Closure, SetValuedGrid, color_to_mask, set_to_mask
+
+
+def infer_bg_from_border(x: np.ndarray) -> int:
+    """
+    Infer background color from border pixels (deterministic majority vote).
+
+    Takes the most common color on the border (top row, bottom row, left col, right col).
+    Deterministic tie-break: if multiple colors have same count, choose lowest color.
+
+    Args:
+        x: Input grid (H×W numpy array)
+
+    Returns:
+        Background color (int 0-9)
+    """
+    H, W = x.shape
+    border_pixels = []
+
+    # Top & bottom rows
+    border_pixels.extend(x[0, :])
+    border_pixels.extend(x[H-1, :])
+
+    # Left & right cols (excluding corners already counted)
+    if H > 2:
+        border_pixels.extend(x[1:H-1, 0])
+        border_pixels.extend(x[1:H-1, W-1])
+
+    # Majority vote (deterministic tie-break: lowest color)
+    counts = Counter(int(p) for p in border_pixels)
+    # Sort by (-count, color) to pick highest count, then lowest color on ties
+    bg = min(counts.keys(), key=lambda c: (-counts[c], c))
+    return int(bg)
 
 
 # ==============================================================================
@@ -49,8 +82,10 @@ class KEEP_LARGEST_COMPONENT_Closure(Closure):
     """
 
     def apply(self, U: SetValuedGrid, x_input: Grid) -> SetValuedGrid:
-        # Fail loudly if bg not provided (unifier MUST set it)
+        # Infer bg per-input if params["bg"] is None
         bg = self.params["bg"]
+        if bg is None:
+            bg = infer_bg_from_border(x_input)
         objs = components(x_input, bg=bg)
 
         if not objs:
@@ -90,26 +125,33 @@ def unify_KEEP_LARGEST(train: List[Tuple[Grid, Grid]]) -> List[Closure]:
     """
     Unifier for KEEP_LARGEST_COMPONENT.
 
-    Tries all possible bg values {0-9} and returns closures for those that verify.
+    Uses composition-safe gate (preserves_y + compatible_to_y).
+    Prefers bg=None (per-input inference) over explicit bg values.
 
     Returns:
-        List of KEEP_LARGEST closures (one per valid bg value)
+        List of KEEP_LARGEST closures (usually 0 or 1)
         Empty list if no bg value works
     """
-    from .closure_engine import run_fixed_point, verify_closures_on_train
+    from .closure_engine import preserves_y, compatible_to_y
 
-    valid_closures = []
+    # Try bg=None first (per-input inference)
+    candidate_none = KEEP_LARGEST_COMPONENT_Closure(
+        "KEEP_LARGEST_COMPONENT[bg=None]",
+        {"bg": None}
+    )
+    if preserves_y(candidate_none, train) and compatible_to_y(candidate_none, train):
+        return [candidate_none]
 
-    # Try all possible background colors
+    # Fallback: enumerate explicit bgs
     for bg in range(10):
         candidate = KEEP_LARGEST_COMPONENT_Closure(
             f"KEEP_LARGEST_COMPONENT[bg={bg}]",
             {"bg": bg}
         )
-        if verify_closures_on_train([candidate], train):
-            valid_closures.append(candidate)
+        if preserves_y(candidate, train) and compatible_to_y(candidate, train):
+            return [candidate]
 
-    return valid_closures
+    return []
 
 
 # ==============================================================================
@@ -131,6 +173,8 @@ class OUTLINE_OBJECTS_Closure(Closure):
         mode = self.params["mode"]
         scope = self.params["scope"]
         bg = self.params["bg"]
+        if bg is None:
+            bg = infer_bg_from_border(x_input)
 
         if mode != "outer":
             raise ValueError(f"Only mode='outer' is implemented, got '{mode}'")
@@ -209,39 +253,44 @@ def unify_OUTLINE_OBJECTS(train: List[Tuple[Grid, Grid]]) -> List[Closure]:
     """
     Unifier for OUTLINE_OBJECTS.
 
+    Uses composition-safe gate (preserves_y + compatible_to_y).
+    Prefers bg=None (per-input inference) over explicit bg values.
+
     Enumerates:
     - mode="outer" (fixed for M1)
     - scope ∈ {"largest", "all"}
-    - bg ∈ {0..9}
-
-    For each candidate:
-    - Build closure
-    - Call verify_closures_on_train([candidate], train)
-    - If exact on all pairs, collect candidate
+    - bg: Try None first, then {0..9}
 
     Returns:
         List of OUTLINE_OBJECTS closures (usually 0 or 1)
         Empty list if no params work
     """
-    from .closure_engine import verify_closures_on_train
-
-    valid_closures = []
+    from .closure_engine import preserves_y, compatible_to_y
 
     # Enumerate parameters
     mode = "outer"  # Fixed for M1
     scopes = ["largest", "all"]
-    bgs = range(10)
 
+    # Try bg=None first for each scope
     for scope in scopes:
-        for bg in bgs:
+        candidate_none = OUTLINE_OBJECTS_Closure(
+            f"OUTLINE_OBJECTS[mode={mode},scope={scope},bg=None]",
+            {"mode": mode, "scope": scope, "bg": None}
+        )
+        if preserves_y(candidate_none, train) and compatible_to_y(candidate_none, train):
+            return [candidate_none]
+
+    # Fallback: enumerate explicit bgs
+    for scope in scopes:
+        for bg in range(10):
             candidate = OUTLINE_OBJECTS_Closure(
                 f"OUTLINE_OBJECTS[mode={mode},scope={scope},bg={bg}]",
                 {"mode": mode, "scope": scope, "bg": bg}
             )
-            if verify_closures_on_train([candidate], train):
-                valid_closures.append(candidate)
+            if preserves_y(candidate, train) and compatible_to_y(candidate, train):
+                return [candidate]
 
-    return valid_closures
+    return []
 
 
 # ==============================================================================
@@ -320,6 +369,8 @@ class OPEN_CLOSE_Closure(Closure):
         # Fail loudly if required params not provided
         mode = self.params["mode"]
         bg = self.params["bg"]
+        if bg is None:
+            bg = infer_bg_from_border(x_input)
 
         if mode not in ["open", "close"]:
             raise ValueError(f"Invalid mode: {mode}. Expected 'open' or 'close'.")
@@ -380,37 +431,42 @@ def unify_OPEN_CLOSE(train: List[Tuple[Grid, Grid]]) -> List[Closure]:
     """
     Unifier for OPEN_CLOSE.
 
+    Uses composition-safe gate (preserves_y + compatible_to_y).
+    Prefers bg=None (per-input inference) over explicit bg values.
+
     Enumerates:
     - mode ∈ {"open", "close"}
-    - bg ∈ {0..9}
-
-    For each candidate:
-    - Build closure
-    - Call verify_closures_on_train([candidate], train)
-    - If exact on all pairs, collect candidate
+    - bg: Try None first, then {0..9}
 
     Returns:
         List of OPEN_CLOSE closures (usually 0 or 1)
         Empty list if no params work
     """
-    from .closure_engine import verify_closures_on_train
-
-    valid_closures = []
+    from .closure_engine import preserves_y, compatible_to_y
 
     # Enumerate parameters
     modes = ["open", "close"]
-    bgs = range(10)
 
+    # Try bg=None first for each mode
     for mode in modes:
-        for bg in bgs:
+        candidate_none = OPEN_CLOSE_Closure(
+            f"OPEN_CLOSE[mode={mode},bg=None]",
+            {"mode": mode, "bg": None}
+        )
+        if preserves_y(candidate_none, train) and compatible_to_y(candidate_none, train):
+            return [candidate_none]
+
+    # Fallback: enumerate explicit bgs
+    for mode in modes:
+        for bg in range(10):
             candidate = OPEN_CLOSE_Closure(
                 f"OPEN_CLOSE[mode={mode},bg={bg}]",
                 {"mode": mode, "bg": bg}
             )
-            if verify_closures_on_train([candidate], train):
-                valid_closures.append(candidate)
+            if preserves_y(candidate, train) and compatible_to_y(candidate, train):
+                return [candidate]
 
-    return valid_closures
+    return []
 
 
 # ==============================================================================
@@ -432,6 +488,8 @@ class AXIS_PROJECTION_Closure(Closure):
         scope = self.params["scope"]
         mode = self.params["mode"]
         bg = self.params["bg"]
+        if bg is None:
+            bg = infer_bg_from_border(x_input)
 
         if axis not in ["row", "col"]:
             raise ValueError(f"Invalid axis: {axis}. Expected 'row' or 'col'.")
@@ -497,37 +555,48 @@ def unify_AXIS_PROJECTION(train: List[Tuple[Grid, Grid]]) -> List[Closure]:
     """
     Unifier for AXIS_PROJECTION.
 
+    Uses composition-safe gate (preserves_y + compatible_to_y).
+    Prefers bg=None (per-input inference) over explicit bg values.
+
     Enumerates:
     - axis ∈ {"row", "col"}
     - scope ∈ {"largest", "all"}
     - mode = "to_border" (fixed)
-    - bg ∈ {0..9}
+    - bg: Try None first, then {0..9}
 
     Returns:
         List of AXIS_PROJECTION closures (usually 0 or 1)
         Empty list if no params work on ALL train pairs
     """
-    from .closure_engine import verify_closures_on_train
-
-    valid_closures = []
+    from .closure_engine import preserves_y, compatible_to_y
 
     # Enumerate parameters
     axes = ["row", "col"]
     scopes = ["largest", "all"]
     mode = "to_border"  # Fixed for M2.2
-    bgs = range(10)
 
+    # Try bg=None first for each axis/scope combo
     for axis in axes:
         for scope in scopes:
-            for bg in bgs:
+            candidate_none = AXIS_PROJECTION_Closure(
+                f"AXIS_PROJECTION[axis={axis},scope={scope},mode={mode},bg=None]",
+                {"axis": axis, "scope": scope, "mode": mode, "bg": None}
+            )
+            if preserves_y(candidate_none, train) and compatible_to_y(candidate_none, train):
+                return [candidate_none]
+
+    # Fallback: enumerate explicit bgs
+    for axis in axes:
+        for scope in scopes:
+            for bg in range(10):
                 candidate = AXIS_PROJECTION_Closure(
                     f"AXIS_PROJECTION[axis={axis},scope={scope},mode={mode},bg={bg}]",
                     {"axis": axis, "scope": scope, "mode": mode, "bg": bg}
                 )
-                if verify_closures_on_train([candidate], train):
-                    valid_closures.append(candidate)
+                if preserves_y(candidate, train) and compatible_to_y(candidate, train):
+                    return [candidate]
 
-    return valid_closures
+    return []
 
 
 # ==============================================================================
@@ -559,6 +628,8 @@ class SYMMETRY_COMPLETION_Closure(Closure):
         axis = self.params["axis"]
         scope = self.params["scope"]
         bg = self.params["bg"]
+        if bg is None:
+            bg = infer_bg_from_border(x_input)
 
         if axis not in ["v", "h", "diag", "anti"]:
             raise ValueError(f"Invalid axis: {axis}. Expected 'v', 'h', 'diag', or 'anti'.")
@@ -715,23 +786,19 @@ def unify_SYMMETRY_COMPLETION(train: List[Tuple[Grid, Grid]]) -> List[Closure]:
     """
     Unifier for SYMMETRY_COMPLETION.
 
+    Uses composition-safe gate (preserves_y + compatible_to_y).
+    Prefers bg=None (per-input inference) over explicit bg values.
+
     Enumerates:
     - axis ∈ {"v", "h", "diag", "anti"}
     - scope ∈ {"global", "largest", "per_object"}
-    - bg ∈ {0..9}
-
-    For each candidate:
-    - Build closure
-    - Call verify_closures_on_train([candidate], train)
-    - If exact on ALL pairs, collect candidate
+    - bg: Try None first, then {0..9}
 
     Returns:
         List of SYMMETRY_COMPLETION closures (usually 0 or 1)
         Empty list if no params work on ALL train pairs
     """
-    from .closure_engine import verify_closures_on_train
-
-    valid_closures = []
+    from .closure_engine import preserves_y, compatible_to_y
 
     # Check if any train input is non-square
     has_nonsquare = any(x.shape[0] != x.shape[1] for x, _ in train)
@@ -744,16 +811,26 @@ def unify_SYMMETRY_COMPLETION(train: List[Tuple[Grid, Grid]]) -> List[Closure]:
         axes = ["v", "h", "diag", "anti"]
 
     scopes = ["global", "largest", "per_object"]
-    bgs = range(10)
 
+    # Try bg=None first for each axis/scope combo
     for axis in axes:
         for scope in scopes:
-            for bg in bgs:
+            candidate_none = SYMMETRY_COMPLETION_Closure(
+                f"SYMMETRY_COMPLETION[axis={axis},scope={scope},bg=None]",
+                {"axis": axis, "scope": scope, "bg": None}
+            )
+            if preserves_y(candidate_none, train) and compatible_to_y(candidate_none, train):
+                return [candidate_none]
+
+    # Fallback: enumerate explicit bgs
+    for axis in axes:
+        for scope in scopes:
+            for bg in range(10):
                 candidate = SYMMETRY_COMPLETION_Closure(
                     f"SYMMETRY_COMPLETION[axis={axis},scope={scope},bg={bg}]",
                     {"axis": axis, "scope": scope, "bg": bg}
                 )
-                if verify_closures_on_train([candidate], train):
-                    valid_closures.append(candidate)
+                if preserves_y(candidate, train) and compatible_to_y(candidate, train):
+                    return [candidate]
 
-    return valid_closures
+    return []

@@ -274,3 +274,63 @@ def verify_closures_on_train(closures: List[Closure],
             return False
 
     return True
+
+
+def preserves_y(closure: Closure, train: List[Tuple[Grid, Grid]]) -> bool:
+    """
+    Verify closure preserves singleton(y) for all train pairs.
+
+    A closure is composition-safe if applying it to the expected output
+    doesn't change the output. This ensures the closure won't interfere
+    with other closures in the composition.
+
+    Args:
+        closure: Closure to test
+        train: List of (input, output) pairs
+
+    Returns:
+        True if closure.apply(singleton(y), x) == singleton(y) for all pairs
+    """
+    for x, y in train:
+        # BLOCKER FIX: Check shape compatibility first
+        if x.shape != y.shape:
+            return False  # Cannot preserve y if shapes differ
+
+        U_y = init_from_grid(y)
+        U_y_after = closure.apply(U_y, x)
+        if U_y_after != U_y:
+            return False
+    return True
+
+
+def compatible_to_y(closure: Closure, train: List[Tuple[Grid, Grid]]) -> bool:
+    """
+    Verify closure doesn't introduce colors absent in y.
+
+    A closure is compatible with the output if applying it to the input
+    doesn't introduce colors that aren't in the expected output. This
+    prevents introducing spurious color possibilities.
+
+    Args:
+        closure: Closure to test
+        train: List of (input, output) pairs
+
+    Returns:
+        True if all colors in closure.apply(singleton(x), x) are subset of colors in y
+    """
+    for x, y in train:
+        # BLOCKER FIX: Check shape compatibility first
+        if x.shape != y.shape:
+            return False  # Cannot check compatibility if shapes differ
+
+        U_x = init_from_grid(x)
+        U_x_after = closure.apply(U_x, x)
+        # Extract colors in y
+        y_colors = set(int(c) for c in y.flatten())
+        # Check colors in U_x_after are subset of y_colors
+        for r in range(U_x_after.H):
+            for c in range(U_x_after.W):
+                allowed = U_x_after.get_set(r, c)
+                if not allowed.issubset(y_colors):
+                    return False
+    return True
