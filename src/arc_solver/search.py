@@ -215,7 +215,13 @@ def autobuild_closures(train):
 
     Ordered by cost (cheap → expensive).
     """
-    from .closures import unify_KEEP_LARGEST, unify_OUTLINE_OBJECTS, unify_OPEN_CLOSE
+    from .closures import (
+        unify_KEEP_LARGEST,
+        unify_OUTLINE_OBJECTS,
+        unify_OPEN_CLOSE,
+        unify_AXIS_PROJECTION,
+        unify_SYMMETRY_COMPLETION
+    )
 
     closures = []
     # B1: KEEP_LARGEST_COMPONENT
@@ -224,6 +230,10 @@ def autobuild_closures(train):
     closures += unify_OUTLINE_OBJECTS(train)
     # M2.1: OPEN_CLOSE
     closures += unify_OPEN_CLOSE(train)
+    # M2.2: AXIS_PROJECTION
+    closures += unify_AXIS_PROJECTION(train)
+    # M2.3: SYMMETRY_COMPLETION
+    closures += unify_SYMMETRY_COMPLETION(train)
     # TODO: Add more closure families as they're implemented
 
     return closures

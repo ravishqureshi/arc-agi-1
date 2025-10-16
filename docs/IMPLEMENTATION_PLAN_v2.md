@@ -359,7 +359,7 @@ def unify_OPEN_CLOSE(train) -> list[Closure]:
 
 ---
 
-#### M2.2 — Closure: AXIS_PROJECTION_FILL
+#### M2.2 — Closure: AXIS_PROJECTION_FILL ✅ COMPLETED
 
 **Law (one-liner)**
 From each object pixel, **extend along row or column to border** (no obstacles in M2), painting the object color along the ray(s). Scope can be `largest` or `all`.

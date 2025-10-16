@@ -33,7 +33,11 @@ from arc_solver.closures import (
     OUTLINE_OBJECTS_Closure,
     unify_OUTLINE_OBJECTS,
     OPEN_CLOSE_Closure,
-    unify_OPEN_CLOSE
+    unify_OPEN_CLOSE,
+    AXIS_PROJECTION_Closure,
+    unify_AXIS_PROJECTION,
+    SYMMETRY_COMPLETION_Closure,
+    unify_SYMMETRY_COMPLETION
 )
 
 
@@ -472,6 +476,18 @@ def run_all_tests():
         ("OPEN_CLOSE: Idempotence", test_idempotence_open_close),
         ("OPEN_CLOSE: OPEN train exactness", test_train_exactness_open),
         ("OPEN_CLOSE: CLOSE train exactness", test_train_exactness_close),
+        # AXIS_PROJECTION tests
+        ("AXIS_PROJECTION: Shrinking", test_shrinking_axis_projection),
+        ("AXIS_PROJECTION: Idempotence", test_idempotence_axis_projection),
+        ("AXIS_PROJECTION: Train exactness (col)", test_train_exactness_axis_projection_col),
+        ("AXIS_PROJECTION: Train exactness (row)", test_train_exactness_axis_projection_row),
+        ("AXIS_PROJECTION: Scope largest vs all", test_axis_projection_scope_largest_vs_all),
+        # SYMMETRY_COMPLETION tests
+        ("SYMMETRY: Shrinking", test_shrinking_symmetry_completion),
+        ("SYMMETRY: Idempotence", test_idempotence_symmetry_completion),
+        ("SYMMETRY: Vertical global", test_train_exactness_symmetry_vertical),
+        ("SYMMETRY: Largest only", test_train_exactness_symmetry_largest_only),
+        ("SYMMETRY: Diagonal", test_train_exactness_symmetry_diagonal),
     ]
 
     passed = 0
@@ -773,6 +789,246 @@ def test_train_exactness_close():
     y_pred = U.to_grid()
     assert np.array_equal(y_pred, y), \
         f"CLOSE test failed.\nInput:\n{x}\nPred:\n{y_pred}\nExpected:\n{y}"
+
+
+# ==============================================================================
+# AXIS_PROJECTION Property Tests
+# ==============================================================================
+
+def test_shrinking_axis_projection():
+    """Test: apply(U) ⊆ U (closure only removes possibilities)."""
+    # Single dot (1x1 object) - col projection fills entire column
+    x = np.array([
+        [0, 0, 0],
+        [0, 1, 0],
+        [0, 0, 0]
+    ], dtype=int)
+
+    U = init_top(x.shape[0], x.shape[1])
+    U_copy = U.copy()
+
+    closure = AXIS_PROJECTION_Closure("test", {"axis": "col", "scope": "largest", "mode": "to_border", "bg": 0})
+    U_result = closure.apply(U, x)
+
+    assert grid_subset_or_equal(U_result, U_copy), \
+        "Shrinking violated: apply(U) should be subset of U"
+
+def test_idempotence_axis_projection():
+    """Test: ≤2-pass convergence for AXIS_PROJECTION."""
+    # Horizontal bar - row projection
+    x = np.array([
+        [0, 0, 0, 0],
+        [0, 2, 2, 0],
+        [0, 0, 0, 0]
+    ], dtype=int)
+
+    closure = AXIS_PROJECTION_Closure("test", {"axis": "row", "scope": "all", "mode": "to_border", "bg": 0})
+    U, stats = run_fixed_point([closure], x)
+
+    assert stats["iters"] <= 2, \
+        f"Expected ≤2 iterations, got {stats['iters']}"
+
+def test_train_exactness_axis_projection_col():
+    """Test: Column projection fills entire column from object pixels."""
+    # Single dot at (1,1)
+    x = np.array([
+        [0, 0, 0],
+        [0, 1, 0],
+        [0, 0, 0]
+    ], dtype=int)
+
+    # Expected: entire column 1 filled with color 1
+    y = np.array([
+        [0, 1, 0],
+        [0, 1, 0],
+        [0, 1, 0]
+    ], dtype=int)
+
+    closure = AXIS_PROJECTION_Closure("test", {"axis": "col", "scope": "largest", "mode": "to_border", "bg": 0})
+    U, _ = run_fixed_point([closure], x)
+
+    assert U.is_fully_determined()
+    y_pred = U.to_grid()
+    assert np.array_equal(y_pred, y), \
+        f"Column projection failed.\nInput:\n{x}\nPred:\n{y_pred}\nExpected:\n{y}"
+
+def test_train_exactness_axis_projection_row():
+    """Test: Row projection fills entire rows from horizontal bar."""
+    # Horizontal bar at row 1
+    x = np.array([
+        [0, 0, 0, 0],
+        [0, 2, 2, 0],
+        [0, 0, 0, 0]
+    ], dtype=int)
+
+    # Expected: entire row 1 filled with color 2
+    y = np.array([
+        [0, 0, 0, 0],
+        [2, 2, 2, 2],
+        [0, 0, 0, 0]
+    ], dtype=int)
+
+    closure = AXIS_PROJECTION_Closure("test", {"axis": "row", "scope": "all", "mode": "to_border", "bg": 0})
+    U, _ = run_fixed_point([closure], x)
+
+    assert U.is_fully_determined()
+    y_pred = U.to_grid()
+    assert np.array_equal(y_pred, y), \
+        f"Row projection failed.\nInput:\n{x}\nPred:\n{y_pred}\nExpected:\n{y}"
+
+def test_axis_projection_scope_largest_vs_all():
+    """Test: scope='largest' vs scope='all' on 2-object grid."""
+    # Two dots: (0,0) color 1 (size 1), (2,2) color 2 (size 1)
+    # Equal size → deterministic tie-break picks first by bbox position
+    x = np.array([
+        [1, 0, 0],
+        [0, 0, 0],
+        [0, 0, 2]
+    ], dtype=int)
+
+    # scope="largest" should pick one (deterministic)
+    closure_largest = AXIS_PROJECTION_Closure("test", {"axis": "col", "scope": "largest", "mode": "to_border", "bg": 0})
+    U_largest, _ = run_fixed_point([closure_largest], x)
+
+    # scope="all" should project both
+    closure_all = AXIS_PROJECTION_Closure("test", {"axis": "col", "scope": "all", "mode": "to_border", "bg": 0})
+    U_all, _ = run_fixed_point([closure_all], x)
+
+    # Results should differ (largest picks one, all picks both)
+    assert U_largest != U_all, \
+        "scope='largest' vs scope='all' should produce different results on multi-object grid"
+
+
+# ==============================================================================
+# SYMMETRY_COMPLETION Property Tests
+# ==============================================================================
+
+def test_shrinking_symmetry_completion():
+    """Test: apply(U) ⊆ U (closure only removes possibilities)."""
+    # Half-shape (left side only)
+    x = np.array([
+        [1, 1, 0, 0],
+        [1, 0, 0, 0],
+        [1, 1, 0, 0]
+    ], dtype=int)
+
+    U = init_top(x.shape[0], x.shape[1])
+    U_copy = U.copy()
+
+    closure = SYMMETRY_COMPLETION_Closure(
+        "test",
+        {"axis": "v", "scope": "global", "bg": 0}
+    )
+    U_result = closure.apply(U, x)
+
+    assert grid_subset_or_equal(U_result, U_copy), \
+        "Shrinking violated: apply(U) should be subset of U"
+
+
+def test_idempotence_symmetry_completion():
+    """Test: ≤2-pass convergence for SYMMETRY_COMPLETION."""
+    # Asymmetric shape
+    x = np.array([
+        [0, 2, 0],
+        [2, 2, 0],
+        [0, 2, 0]
+    ], dtype=int)
+
+    closure = SYMMETRY_COMPLETION_Closure(
+        "test",
+        {"axis": "h", "scope": "global", "bg": 0}
+    )
+    U, stats = run_fixed_point([closure], x)
+
+    assert stats["iters"] <= 2, \
+        f"Expected ≤2 iterations, got {stats['iters']}"
+
+
+def test_train_exactness_symmetry_vertical():
+    """Test: Vertical reflection completes half-shape to full symmetric object."""
+    # Input: half-shape on left
+    x = np.array([
+        [1, 1, 0, 0],
+        [1, 0, 0, 0],
+        [1, 1, 0, 0]
+    ], dtype=int)
+
+    # Expected: mirrored vertically to create symmetric shape
+    y = np.array([
+        [1, 1, 1, 1],
+        [1, 0, 0, 1],
+        [1, 1, 1, 1]
+    ], dtype=int)
+
+    closure = SYMMETRY_COMPLETION_Closure(
+        "test",
+        {"axis": "v", "scope": "global", "bg": 0}
+    )
+    U, _ = run_fixed_point([closure], x)
+
+    assert U.is_fully_determined()
+    y_pred = U.to_grid()
+    assert np.array_equal(y_pred, y), \
+        f"Vertical symmetry failed.\nInput:\n{x}\nPred:\n{y_pred}\nExpected:\n{y}"
+
+
+def test_train_exactness_symmetry_largest_only():
+    """Test: scope='largest' reflects only largest component, leaves noise."""
+    # Input: large component (color 1) + small noise (color 2)
+    x = np.array([
+        [1, 1, 0, 0, 2],
+        [1, 0, 0, 0, 0],
+        [1, 1, 0, 0, 0]
+    ], dtype=int)
+
+    # Expected: largest reflected (col 0->4, col 1->3), noise (2) preserved
+    # Vertical reflection: column c mirrors to column W-1-c
+    # For W=5: col 0->4, col 1->3, col 2->2 (center)
+    # Union preserves original (including noise) over reflection
+    y = np.array([
+        [1, 1, 0, 1, 2],  # col 4 keeps noise (2), col 3 gets reflection of col 1
+        [1, 0, 0, 0, 1],  # col 4 gets reflection of col 0
+        [1, 1, 0, 1, 1]   # col 3,4 get reflections of cols 1,0
+    ], dtype=int)
+
+    closure = SYMMETRY_COMPLETION_Closure(
+        "test",
+        {"axis": "v", "scope": "largest", "bg": 0}
+    )
+    U, _ = run_fixed_point([closure], x)
+
+    assert U.is_fully_determined()
+    y_pred = U.to_grid()
+    assert np.array_equal(y_pred, y), \
+        f"scope='largest' failed.\nPred:\n{y_pred}\nExpected:\n{y}"
+
+
+def test_train_exactness_symmetry_diagonal():
+    """Test: Diagonal reflection on square grid."""
+    # Input: upper-triangle pattern
+    x = np.array([
+        [0, 3, 3],
+        [0, 0, 3],
+        [0, 0, 0]
+    ], dtype=int)
+
+    # Expected: symmetric across main diagonal
+    y = np.array([
+        [0, 3, 3],
+        [3, 0, 3],
+        [3, 3, 0]
+    ], dtype=int)
+
+    closure = SYMMETRY_COMPLETION_Closure(
+        "test",
+        {"axis": "diag", "scope": "global", "bg": 0}
+    )
+    U, _ = run_fixed_point([closure], x)
+
+    assert U.is_fully_determined()
+    y_pred = U.to_grid()
+    assert np.array_equal(y_pred, y), \
+        f"Diagonal symmetry failed.\nPred:\n{y_pred}\nExpected:\n{y}"
 
 
 # ==============================================================================
