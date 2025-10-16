@@ -504,6 +504,9 @@ def run_all_tests():
         ("MOD_PATTERN: Shrinking", test_shrinking_mod_pattern),
         ("MOD_PATTERN: Idempotence", test_idempotence_mod_pattern),
         ("MOD_PATTERN: Train exactness", test_train_exactness_mod_pattern),
+        # Gate-Fix tests
+        ("Gate-Fix: compatible_to_y allows complementary", test_compatible_to_y_allows_complementary_closures),
+        ("Gate-Fix: unifiers collect multiple candidates", test_unifiers_collect_multiple_candidates),
     ]
 
     passed = 0
@@ -1235,6 +1238,49 @@ def test_train_exactness_mod_pattern():
         assert closure.params["p"] == 2, "Should find p=2"
         assert closure.params["q"] == 2, "Should find q=2"
     # If no closures found, that's OK (composition-safe gate rejected it)
+
+
+# ==============================================================================
+# Gate-Fix Tests
+# ==============================================================================
+
+def test_compatible_to_y_allows_complementary_closures():
+    """Test: New compatible_to_y allows closures that introduce colors needing later fix."""
+    # Task: Half-shape needs SYMMETRY + COLOR_PERM
+    # Input: half red (1), output: full blue (8)
+    x = np.array([[1, 1, 0, 0], [1, 0, 0, 0]])
+    y = np.array([[8, 8, 8, 8], [8, 0, 0, 8]])
+    train = [(x, y)]
+
+    # SYMMETRY_COMPLETION will produce red on right side (not in y's palette)
+    # OLD compatible_to_y would reject this
+    # NEW compatible_to_y should accept (doesn't destroy known-correct pixels)
+    sym_closure = SYMMETRY_COMPLETION_Closure(
+        "test", {"axis": "v", "scope": "global", "bg": 0}
+    )
+
+    # Should pass new gate (doesn't destroy x[r,c]==y[r,c] pixels)
+    assert compatible_to_y(sym_closure, train), \
+        "New compatible_to_y should allow complementary closures"
+
+
+def test_unifiers_collect_multiple_candidates():
+    """Test: Unifiers return list of all valid candidates (not just first)."""
+    # Create train where multiple bgs work
+    x1 = np.array([[1, 1], [2, 2]])
+    y1 = np.array([[1, 1], [0, 0]])
+    train = [(x1, y1)]
+
+    # Multiple bgs might pass gates (bg=0, bg=2, etc.)
+    closures = unify_KEEP_LARGEST(train)
+
+    # Should return ALL valid candidates (at least bg=None should work)
+    assert len(closures) >= 1, "Should collect at least one candidate"
+
+    # If multiple candidates, verify all pass gates individually
+    for c in closures:
+        assert preserves_y(c, train), f"Collected closure {c.name} should preserve y"
+        assert compatible_to_y(c, train), f"Collected closure {c.name} should be compatible"
 
 
 # ==============================================================================

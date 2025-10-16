@@ -305,32 +305,19 @@ def preserves_y(closure: Closure, train: List[Tuple[Grid, Grid]]) -> bool:
 
 def compatible_to_y(closure: Closure, train: List[Tuple[Grid, Grid]]) -> bool:
     """
-    Verify closure doesn't introduce colors absent in y.
-
-    A closure is compatible with the output if applying it to the input
-    doesn't introduce colors that aren't in the expected output. This
-    prevents introducing spurious color possibilities.
-
-    Args:
-        closure: Closure to test
-        train: List of (input, output) pairs
-
-    Returns:
-        True if all colors in closure.apply(singleton(x), x) are subset of colors in y
+    Non-destructive on known-correct pixels.
+    For cells where x[r,c] == y[r,c], applying closure to singleton(x) must retain that color.
+    Does not enforce global palette subset - final composition checked by verify_closures_on_train.
     """
     for x, y in train:
-        # BLOCKER FIX: Check shape compatibility first
         if x.shape != y.shape:
-            return False  # Cannot check compatibility if shapes differ
-
-        U_x = init_from_grid(x)
-        U_x_after = closure.apply(U_x, x)
-        # Extract colors in y
-        y_colors = set(int(c) for c in y.flatten())
-        # Check colors in U_x_after are subset of y_colors
-        for r in range(U_x_after.H):
-            for c in range(U_x_after.W):
-                allowed = U_x_after.get_set(r, c)
-                if not allowed.issubset(y_colors):
-                    return False
+            return False
+        Ux = init_from_grid(x)
+        Ux2 = closure.apply(Ux, x)
+        H, W = x.shape
+        for r in range(H):
+            for c in range(W):
+                if int(x[r,c]) == int(y[r,c]):
+                    if int(y[r,c]) not in Ux2.get_set(r, c):
+                        return False
     return True

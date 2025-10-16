@@ -629,7 +629,7 @@ Here’s a tight, dependency-free breakdown for **M3**. It assumes you’ve fini
 
 ### M3 — MOD_PATTERN + DIAGONAL_REPEAT
 
-#### M3.1 — Closure: MOD_PATTERN (periodic mask, (p,q,anchor))
+#### M3.1 — Closure: MOD_PATTERN (periodic mask, (p,q,anchor)) ✅ COMPLETED
 
 **Law (one-liner)**
 Cells partitioned by congruence classes `((r−ar) mod p, (c−ac) mod q)` must take fixed color sets (derived from input only), producing the periodic pattern.
@@ -681,6 +681,79 @@ def unify_MOD_PATTERN(train) -> list[Closure]:
 * Candidate passes preserves_y/compatible checks; set of closures reaches train exactness; LFP singletons on minis.
 
 ---
+
+#### Work-Order for Gate-Fix
+
+Milestone: Gate-Fix — Composition Compatibility + Unifier Collection
+
+Objective:
+Fix the composition gate so valid closures aren’t rejected early, and let unifiers **collect** all compatible candidates (composition decides). This should immediately raise coverage.
+
+Scope:
+- Replace current `compatible_to_y` with a **non-destructive** check on known-correct pixels.
+- Update existing unifiers to **collect** all candidates that pass `preserves_y` + new `compatible_to_y` (do not early-return on first hit).
+- No new closure families in this WO. Fixed-point only (no beam). Training-only induction.
+
+Files to edit:
+- `src/arc_solver/closure_engine.py`
+  - Replace `compatible_to_y` with:
+    ```python
+    def compatible_to_y(closure, train):
+        for x, y in train:
+            if x.shape != y.shape:
+                return False
+            Ux  = init_from_grid(x)
+            Ux2 = closure.apply(Ux, x)
+            H, W = x.shape
+            for r in range(H):
+                for c in range(W):
+                    if int(x[r,c]) == int(y[r,c]):
+                        if not Ux2.allows(r, c, int(y[r,c])):  # do not destroy known-correct pixels
+                            return False
+        return True
+    ```
+- `src/arc_solver/closures.py`
+  - For each implemented unifier (`unify_KEEP_LARGEST`, `unify_OUTLINE_OBJECTS`, `unify_OPEN_CLOSE`, `unify_AXIS_PROJECTION`, `unify_SYMMETRY_COMPLETION`, `unify_MOD_PATTERN`):
+    - **Collect** valid candidates instead of returning the first:
+      ```python
+      valid = []
+      for params in enumerate_candidates(...):
+          cand = FAMILY_Closure(name, params)
+          if preserves_y(cand, train) and compatible_to_y(cand, train):
+              valid.append(cand)
+      return valid  # may be 0..N; composition will verify the set
+      ```
+- `src/arc_solver/search.py`
+  - Keep existing greedy composition verify:
+    ```python
+    kept = []
+    for c in candidates:
+        kept.append(c)
+        if not verify_closures_on_train(kept, train):
+            kept.pop()
+    return kept
+    ```
+
+Tests to add/update:
+- `tests/test_closures_minimal.py`
+  - Add one tiny test that `compatible_to_y` **retains** y-colors where x==y.
+  - Ensure unifiers can return multiple candidates and that composition still passes train exactness on a small synthetic case.
+
+Data-use rule (training-only induction):
+- Allowed: `data/arc-agi_training_challenges.json` (+ optional training solutions).
+- **Forbidden** inside unifiers/closures/tests: any `..._evaluation_*` or `..._test_*`.
+
+Reviewers to run:
+- anti-hardcode-implementation-auditor-reviewer
+- math-closure-soundness-reviewer
+- submission-determinism-reviewer
+
+Verify commands:
+```bash
+python scripts/run_public.py --arc_public_dir <FILL_THIS> --out runs/<DATE>
+bash scripts/determinism.sh <FILL_THIS>
+python scripts/submission_validator.py runs/<DATE>/predictions.json
+
 
 #### M3.2 — Closure: DIAGONAL_REPEAT (shift chain along Δ=(dr,dc), k steps)
 

@@ -129,10 +129,12 @@ def unify_KEEP_LARGEST(train: List[Tuple[Grid, Grid]]) -> List[Closure]:
     Prefers bg=None (per-input inference) over explicit bg values.
 
     Returns:
-        List of KEEP_LARGEST closures (usually 0 or 1)
+        List of KEEP_LARGEST closures (0..N candidates)
         Empty list if no bg value works
     """
     from .closure_engine import preserves_y, compatible_to_y
+
+    valid = []
 
     # Try bg=None first (per-input inference)
     candidate_none = KEEP_LARGEST_COMPONENT_Closure(
@@ -140,7 +142,7 @@ def unify_KEEP_LARGEST(train: List[Tuple[Grid, Grid]]) -> List[Closure]:
         {"bg": None}
     )
     if preserves_y(candidate_none, train) and compatible_to_y(candidate_none, train):
-        return [candidate_none]
+        valid.append(candidate_none)
 
     # Fallback: enumerate explicit bgs
     for bg in range(10):
@@ -149,9 +151,9 @@ def unify_KEEP_LARGEST(train: List[Tuple[Grid, Grid]]) -> List[Closure]:
             {"bg": bg}
         )
         if preserves_y(candidate, train) and compatible_to_y(candidate, train):
-            return [candidate]
+            valid.append(candidate)
 
-    return []
+    return valid
 
 
 # ==============================================================================
@@ -262,10 +264,12 @@ def unify_OUTLINE_OBJECTS(train: List[Tuple[Grid, Grid]]) -> List[Closure]:
     - bg: Try None first, then {0..9}
 
     Returns:
-        List of OUTLINE_OBJECTS closures (usually 0 or 1)
+        List of OUTLINE_OBJECTS closures (0..N candidates)
         Empty list if no params work
     """
     from .closure_engine import preserves_y, compatible_to_y
+
+    valid = []
 
     # Enumerate parameters
     mode = "outer"  # Fixed for M1
@@ -278,7 +282,7 @@ def unify_OUTLINE_OBJECTS(train: List[Tuple[Grid, Grid]]) -> List[Closure]:
             {"mode": mode, "scope": scope, "bg": None}
         )
         if preserves_y(candidate_none, train) and compatible_to_y(candidate_none, train):
-            return [candidate_none]
+            valid.append(candidate_none)
 
     # Fallback: enumerate explicit bgs
     for scope in scopes:
@@ -288,9 +292,9 @@ def unify_OUTLINE_OBJECTS(train: List[Tuple[Grid, Grid]]) -> List[Closure]:
                 {"mode": mode, "scope": scope, "bg": bg}
             )
             if preserves_y(candidate, train) and compatible_to_y(candidate, train):
-                return [candidate]
+                valid.append(candidate)
 
-    return []
+    return valid
 
 
 # ==============================================================================
@@ -439,10 +443,12 @@ def unify_OPEN_CLOSE(train: List[Tuple[Grid, Grid]]) -> List[Closure]:
     - bg: Try None first, then {0..9}
 
     Returns:
-        List of OPEN_CLOSE closures (usually 0 or 1)
+        List of OPEN_CLOSE closures (0..N candidates)
         Empty list if no params work
     """
     from .closure_engine import preserves_y, compatible_to_y
+
+    valid = []
 
     # Enumerate parameters
     modes = ["open", "close"]
@@ -454,7 +460,7 @@ def unify_OPEN_CLOSE(train: List[Tuple[Grid, Grid]]) -> List[Closure]:
             {"mode": mode, "bg": None}
         )
         if preserves_y(candidate_none, train) and compatible_to_y(candidate_none, train):
-            return [candidate_none]
+            valid.append(candidate_none)
 
     # Fallback: enumerate explicit bgs
     for mode in modes:
@@ -464,9 +470,9 @@ def unify_OPEN_CLOSE(train: List[Tuple[Grid, Grid]]) -> List[Closure]:
                 {"mode": mode, "bg": bg}
             )
             if preserves_y(candidate, train) and compatible_to_y(candidate, train):
-                return [candidate]
+                valid.append(candidate)
 
-    return []
+    return valid
 
 
 # ==============================================================================
@@ -565,10 +571,12 @@ def unify_AXIS_PROJECTION(train: List[Tuple[Grid, Grid]]) -> List[Closure]:
     - bg: Try None first, then {0..9}
 
     Returns:
-        List of AXIS_PROJECTION closures (usually 0 or 1)
+        List of AXIS_PROJECTION closures (0..N candidates)
         Empty list if no params work on ALL train pairs
     """
     from .closure_engine import preserves_y, compatible_to_y
+
+    valid = []
 
     # Enumerate parameters
     axes = ["row", "col"]
@@ -583,7 +591,7 @@ def unify_AXIS_PROJECTION(train: List[Tuple[Grid, Grid]]) -> List[Closure]:
                 {"axis": axis, "scope": scope, "mode": mode, "bg": None}
             )
             if preserves_y(candidate_none, train) and compatible_to_y(candidate_none, train):
-                return [candidate_none]
+                valid.append(candidate_none)
 
     # Fallback: enumerate explicit bgs
     for axis in axes:
@@ -594,9 +602,9 @@ def unify_AXIS_PROJECTION(train: List[Tuple[Grid, Grid]]) -> List[Closure]:
                     {"axis": axis, "scope": scope, "mode": mode, "bg": bg}
                 )
                 if preserves_y(candidate, train) and compatible_to_y(candidate, train):
-                    return [candidate]
+                    valid.append(candidate)
 
-    return []
+    return valid
 
 
 # ==============================================================================
@@ -795,10 +803,12 @@ def unify_SYMMETRY_COMPLETION(train: List[Tuple[Grid, Grid]]) -> List[Closure]:
     - bg: Try None first, then {0..9}
 
     Returns:
-        List of SYMMETRY_COMPLETION closures (usually 0 or 1)
+        List of SYMMETRY_COMPLETION closures (0..N candidates)
         Empty list if no params work on ALL train pairs
     """
     from .closure_engine import preserves_y, compatible_to_y
+
+    valid = []
 
     # Check if any train input is non-square
     has_nonsquare = any(x.shape[0] != x.shape[1] for x, _ in train)
@@ -820,7 +830,7 @@ def unify_SYMMETRY_COMPLETION(train: List[Tuple[Grid, Grid]]) -> List[Closure]:
                 {"axis": axis, "scope": scope, "bg": None}
             )
             if preserves_y(candidate_none, train) and compatible_to_y(candidate_none, train):
-                return [candidate_none]
+                valid.append(candidate_none)
 
     # Fallback: enumerate explicit bgs
     for axis in axes:
@@ -831,9 +841,9 @@ def unify_SYMMETRY_COMPLETION(train: List[Tuple[Grid, Grid]]) -> List[Closure]:
                     {"axis": axis, "scope": scope, "bg": bg}
                 )
                 if preserves_y(candidate, train) and compatible_to_y(candidate, train):
-                    return [candidate]
+                    valid.append(candidate)
 
-    return []
+    return valid
 
 
 # ==============================================================================
@@ -930,13 +940,15 @@ def unify_MOD_PATTERN(train: List[Tuple[Grid, Grid]]) -> List[Closure]:
        - Check compatible_to_y(candidate, train): apply(singleton(x)) colors subset y colors
        - If both pass, collect candidate
 
-    5. Return [candidate] if found, else []
+    5. Return list of all valid candidates
 
     Returns:
-        List of MOD_PATTERN closures (usually 0 or 1)
+        List of MOD_PATTERN closures (0..N candidates)
         Empty list if no (p,q,anchor) works on ALL train pairs
     """
     from .closure_engine import preserves_y, compatible_to_y
+
+    valid = []
 
     # Step 1: Generate candidate anchors
     x0, y0 = train[0]
@@ -1023,6 +1035,6 @@ def unify_MOD_PATTERN(train: List[Tuple[Grid, Grid]]) -> List[Closure]:
 
                 # Step 5: Composition-safe gates
                 if preserves_y(candidate, train) and compatible_to_y(candidate, train):
-                    return [candidate]
+                    valid.append(candidate)
 
-    return []
+    return valid
