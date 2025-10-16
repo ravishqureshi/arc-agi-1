@@ -934,7 +934,7 @@ CANVAS_SIZE remains in closures for tasks needing shape growth (no longer droppe
 Composition with at least one constraining closure now achieves train exactness on shape-changing minis.
 Coverage does not regress; expect >10/1000 once TILING/MOD over output lattice participate.
 
-#### M3.2 — Closure: DIAGONAL_REPEAT (shift chain along Δ=(dr,dc), k steps)
+#### M3.2 — Closure: DIAGONAL_REPEAT (shift chain along Δ=(dr,dc), k steps) ✅ COMPLETED
 
 **Law (one-liner)**
 Repeat a template object/motif by shifting along a fixed diagonal step `Δ=(dr,dc)` for `k` steps; tie admissible colors along that chain.
@@ -1101,7 +1101,7 @@ def unify_COPY_BY_DELTAS(train) -> list[Closure]:
 
 ---
 
-#### M4.3 — Registration & smoke
+#### M4.3 — Registration & smoke ✅ COMPLETED
 
 **Files**
 
@@ -1139,3 +1139,4 @@ def autobuild_closures(train):
 
 * Run training or evaluation split with your usual commands; ensure determinism, schema OK.
 * Track: tasks with at least one **color closure** and at least one **canvas-aware** closure; solved count should move beyond low double digits.
+======
