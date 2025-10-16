@@ -230,6 +230,7 @@ def autobuild_closures(train):
         unify_AXIS_PROJECTION,
         unify_SYMMETRY_COMPLETION,
         unify_MOD_PATTERN,
+        unify_DIAGONAL_REPEAT,
         unify_TILING,
         unify_COPY_BY_DELTAS
     )
@@ -259,6 +260,8 @@ def autobuild_closures(train):
     candidates += unify_SYMMETRY_COMPLETION(train)
     # M3.1: MOD_PATTERN
     candidates += unify_MOD_PATTERN(train)
+    # M3.2: DIAGONAL_REPEAT
+    candidates += unify_DIAGONAL_REPEAT(train)
     # M4.1: TILING / TILING_ON_MASK
     candidates += unify_TILING(train)
     # M4.2: COPY_BY_DELTAS

@@ -48,6 +48,8 @@ from arc_solver.closures import (
     unify_TILING,
     COPY_BY_DELTAS_Closure,
     unify_COPY_BY_DELTAS,
+    DIAGONAL_REPEAT_Closure,
+    unify_DIAGONAL_REPEAT,
     infer_bg_from_border
 )
 from arc_solver.closure_engine import _compute_canvas
@@ -541,6 +543,10 @@ def run_all_tests():
         ("COPY_BY_DELTAS: Idempotence", test_idempotence_copy_by_deltas),
         ("COPY_BY_DELTAS: Train exactness (shifted)", test_train_exactness_copy_by_deltas_shifted_template),
         ("COPY_BY_DELTAS: Composition safe", test_train_exactness_copy_by_deltas_composition_safe),
+        # M3.2: DIAGONAL_REPEAT tests
+        ("DIAGONAL_REPEAT: Shrinking", test_shrinking_diagonal_repeat),
+        ("DIAGONAL_REPEAT: Idempotence", test_idempotence_diagonal_repeat),
+        ("DIAGONAL_REPEAT: Train exactness", test_train_exactness_diagonal_repeat),
     ]
 
     passed = 0
@@ -1795,6 +1801,80 @@ def test_train_exactness_copy_by_deltas_composition_safe():
     composed = canvas_closures + copy_closures[:1]  # Use first COPY_BY_DELTAS closure
     assert verify_closures_on_train(composed, train), \
         "CANVAS_SIZE + COPY_BY_DELTAS should achieve train exactness"
+
+
+# ==============================================================================
+# M3.2: DIAGONAL_REPEAT Property Tests
+# ==============================================================================
+
+def test_shrinking_diagonal_repeat():
+    """Test DIAGONAL_REPEAT is monotone shrinking."""
+    x = np.array([[0, 0, 0, 0],
+                  [0, 1, 0, 0],
+                  [0, 0, 0, 0],
+                  [0, 0, 0, 0]], dtype=int)
+
+    closure = DIAGONAL_REPEAT_Closure(
+        "test",
+        {"template_strategy": "smallest_object", "dr": 1, "dc": 1, "k": 2,
+         "mode_color": "copy_input_color", "bg": 0}
+    )
+
+    U_top = init_top(4, 4)
+    U_result = closure.apply(U_top, x)
+
+    # Verify shrinking
+    assert grid_subset_or_equal(U_result, U_top), "Shrinking violated"
+
+
+def test_idempotence_diagonal_repeat():
+    """Test DIAGONAL_REPEAT is ≤2-pass idempotent."""
+    x = np.array([[0, 0, 0, 0],
+                  [0, 1, 0, 0],
+                  [0, 0, 0, 0],
+                  [0, 0, 0, 0]], dtype=int)
+
+    closure = DIAGONAL_REPEAT_Closure(
+        "test",
+        {"template_strategy": "smallest_object", "dr": 1, "dc": 1, "k": 2,
+         "mode_color": "copy_input_color", "bg": 0}
+    )
+
+    U = init_top(4, 4)
+    U1 = closure.apply(U, x)
+    U2 = closure.apply(U1, x)
+
+    assert U1 == U2, "Should be idempotent within 2 passes"
+
+
+def test_train_exactness_diagonal_repeat():
+    """Test DIAGONAL_REPEAT achieves train exactness on simple diagonal pattern."""
+    # Simple diagonal repeat: 1 at (1,1) repeated at (2,2) and (3,3)
+    x = np.array([[0, 0, 0, 0],
+                  [0, 1, 0, 0],
+                  [0, 0, 0, 0],
+                  [0, 0, 0, 0]], dtype=int)
+
+    y = np.array([[0, 0, 0, 0],
+                  [0, 1, 0, 0],
+                  [0, 0, 1, 0],
+                  [0, 0, 0, 1]], dtype=int)
+
+    train = [(x, y)]
+
+    # Unify should find dr=1, dc=1, k=2
+    closures = unify_DIAGONAL_REPEAT(train)
+
+    assert len(closures) > 0, "Should unify DIAGONAL_REPEAT"
+
+    # Verify one closure achieves exactness
+    found_exact = False
+    for closure in closures:
+        if verify_closures_on_train([closure], train):
+            found_exact = True
+            break
+
+    assert found_exact, "At least one closure should achieve train exactness"
 
 
 # ==============================================================================

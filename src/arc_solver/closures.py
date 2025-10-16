@@ -2501,3 +2501,300 @@ def unify_COPY_BY_DELTAS(train: List[Tuple[Grid, Grid]]) -> List[Closure]:
                 continue
 
     return valid
+
+
+# ==============================================================================
+# M3.2: DIAGONAL_REPEAT
+# ==============================================================================
+
+class DIAGONAL_REPEAT_Closure(Closure):
+    """
+    Repeat template along diagonal chain Δ=(dr,dc) for k steps.
+
+    params = {
+        "template_strategy": str,           # "smallest_object" | "per_color_smallest"
+        "dr": int,                          # Diagonal row step (-3..3, not (0,0))
+        "dc": int,                          # Diagonal column step (-3..3, not (0,0))
+        "k": int,                           # Chain length (1..5)
+        "mode_color": str,                  # "copy_input_color"
+        "bg": int | None                    # Background color (None = infer per-input)
+    }
+
+    Law: For template T from x_input, repeat at positions {p + t*Δ | t ∈ 0..k, p ∈ T}.
+         U[p + t*Δ] ∩= {template_color(p)} for each t.
+    """
+
+    def apply(self, U: SetValuedGrid, x_input: Grid) -> SetValuedGrid:
+        """
+        Apply diagonal repeat (intersect only).
+
+        Algorithm:
+        1. Extract template T from x_input via template_strategy
+        2. For each t in 0..k:
+           - For each pixel (r, c) in T:
+             - Target: (r + t*dr, c + t*dc)
+             - Intersect U[target] with {T[r,c]}
+        3. Return U_new (monotone, shrinking, deterministic)
+
+        Contract:
+        - Monotone & shrinking: U' = U & mask (only clear bits)
+        - Deterministic: no RNG, no I/O, no wall-clock
+        - ≤2-pass idempotent
+        - Canvas-aware: operates on U.H × U.W (output canvas)
+        - Masks input-only: template derived from x_input only
+
+        Returns:
+            U' where U'[r,c] = U[r,c] ∩ mask (only clear bits)
+        """
+        template_strategy = self.params["template_strategy"]
+        dr = self.params["dr"]
+        dc = self.params["dc"]
+        k = self.params["k"]
+        mode_color = self.params.get("mode_color", "copy_input_color")
+        bg = self.params.get("bg")
+
+        # Infer bg per-input if None
+        if bg is None:
+            bg = infer_bg_from_border(x_input)
+
+        # Step 1: Extract template from x_input
+        template_pixels = _extract_template(x_input, template_strategy, bg)
+
+        if not template_pixels:
+            # No template found - return U unchanged
+            return U
+
+        # Step 2: Build shifted chain positions with colors
+        target_writes = {}  # (r_target, c_target) -> color
+
+        for t in range(k + 1):  # t = 0, 1, ..., k
+            for (r, c), color in template_pixels.items():
+                r_target = r + t * dr
+                c_target = c + t * dc
+                # Bounds check for canvas
+                if 0 <= r_target < U.H and 0 <= c_target < U.W:
+                    if mode_color == "copy_input_color":
+                        target_writes[(r_target, c_target)] = color
+
+        # Step 3: Apply writes (intersect only)
+        # Write to diagonal positions AND preserve input colors for other positions
+        U_new = U.copy()
+        H_in, W_in = x_input.shape
+
+        for r in range(U.H):
+            for c in range(U.W):
+                if (r, c) in target_writes:
+                    # Diagonal position: write template color
+                    color = target_writes[(r, c)]
+                    color_mask = color_to_mask(color)
+                    U_new.intersect(r, c, color_mask)
+                elif r < H_in and c < W_in:
+                    # Within input bounds: preserve input color
+                    input_color = int(x_input[r, c])
+                    input_mask = color_to_mask(input_color)
+                    U_new.intersect(r, c, input_mask)
+                else:
+                    # Outside input bounds: fill with background
+                    bg_mask = color_to_mask(bg)
+                    U_new.intersect(r, c, bg_mask)
+
+        return U_new
+
+
+def unify_DIAGONAL_REPEAT(train: List[Tuple[Grid, Grid]]) -> List[Closure]:
+    """
+    Unifier for DIAGONAL_REPEAT (composition-safe).
+
+    Algorithm:
+    1. Template Extraction: Enumerate strategies
+    2. Diagonal Step Discovery via shifted-chain matching
+    3. Composition-Safe Gates + Mask-Local Check
+    4. Return validated closures
+
+    Returns:
+        List of DIAGONAL_REPEAT closures (0..N candidates)
+        Empty list if no unified params found
+    """
+    from .closure_engine import preserves_y, compatible_to_y, init_from_grid, init_top, _compute_canvas
+
+    valid = []
+
+    # Get canvas params once
+    canvas_closure = (unify_CANVAS_SIZE(train) or [None])[0]
+    canvas_params_dict = canvas_closure.params if canvas_closure else None
+
+    # Enumerate template strategies
+    strategies = ["smallest_object", "per_color_smallest"]
+
+    # Try bg=None first, then explicit bgs
+    bg_candidates = [None] + list(range(10))
+
+    for bg_cand in bg_candidates:
+        for strategy in strategies:
+            # Step 1: Extract templates and discover (dr, dc, k) for each train pair
+            params_per_pair = []
+
+            for x, y in train:
+                # Infer bg if None
+                if bg_cand is None:
+                    bg = infer_bg_from_border(x)
+                else:
+                    bg = bg_cand
+
+                # Extract template from x
+                template_pixels = _extract_template(x, strategy, bg)
+                if not template_pixels:
+                    params_per_pair.append(None)
+                    continue
+
+                # Build template mask (set of positions)
+                template_mask = set(template_pixels.keys())
+
+                # Compute canvas for y
+                if canvas_params_dict:
+                    canvas = _compute_canvas(x, canvas_params_dict)
+                    H_canvas, W_canvas = canvas["H"], canvas["W"]
+                else:
+                    H_canvas, W_canvas = y.shape
+
+                # Compute residual mask M = (x != y) in canvas region
+                H_overlap = min(x.shape[0], y.shape[0])
+                W_overlap = min(x.shape[1], y.shape[1])
+
+                M_target = set()
+                for r in range(H_canvas):
+                    for c in range(W_canvas):
+                        if r < H_overlap and c < W_overlap:
+                            # In overlap region: compare x and y
+                            if x[r, c] != y[r, c]:
+                                M_target.add((r, c))
+                        else:
+                            # Outside overlap: if y has non-bg, it's a change
+                            if r < y.shape[0] and c < y.shape[1]:
+                                if y[r, c] != bg:
+                                    M_target.add((r, c))
+
+                # Discover (dr, dc, k) by matching shifted chains
+                # Find the largest k that works (prefer longer chains)
+                found_params = None
+                best_k = 0
+                for dr in range(-3, 4):
+                    for dc in range(-3, 4):
+                        if dr == 0 and dc == 0:
+                            continue
+
+                        for k in range(1, 6):  # k = 1, 2, 3, 4, 5
+                            # Check if all shifted positions match y's colors
+                            match = True
+                            for t in range(k + 1):  # t = 0, 1, ..., k
+                                for (r, c), color in template_pixels.items():
+                                    r_target = r + t * dr
+                                    c_target = c + t * dc
+                                    # Check bounds
+                                    if r_target < 0 or r_target >= y.shape[0] or c_target < 0 or c_target >= y.shape[1]:
+                                        match = False
+                                        break
+                                    # Check if y has expected color at target position
+                                    if y[r_target, c_target] != color:
+                                        match = False
+                                        break
+                                if not match:
+                                    break
+
+                            if match and k > best_k:
+                                found_params = (dr, dc, k)
+                                best_k = k
+
+                params_per_pair.append(found_params)
+
+            # Check if all pairs have same non-None params
+            if all(p is not None for p in params_per_pair) and len(set(params_per_pair)) == 1:
+                dr, dc, k = params_per_pair[0]
+
+                # Build closure candidate
+                params = {
+                    "template_strategy": strategy,
+                    "dr": int(dr),  # Ensure Python int for JSON serialization
+                    "dc": int(dc),
+                    "k": int(k),
+                    "mode_color": "copy_input_color",
+                    "bg": bg_cand
+                }
+                candidate = DIAGONAL_REPEAT_Closure(
+                    f"DIAGONAL_REPEAT[dr={dr},dc={dc},k={k}]",
+                    params
+                )
+
+                # Verify: preserves_y + compatible_to_y + mask-local check
+                try:
+                    if not preserves_y(candidate, train):
+                        continue
+                    if not compatible_to_y(candidate, train):
+                        continue
+
+                    # Mask-local check
+                    mask_local_ok = True
+                    for x, y in train:
+                        # Compute canvas
+                        if canvas_params_dict:
+                            canvas = _compute_canvas(x, canvas_params_dict)
+                            H_canvas, W_canvas = canvas["H"], canvas["W"]
+                        else:
+                            H_canvas, W_canvas = y.shape
+
+                        # Initialize U: TOP for cells on M (where x != y), singletons elsewhere
+                        # This allows closures to write to M cells via intersection
+                        from .closure_engine import SetValuedGrid
+                        U_x = SetValuedGrid(H_canvas, W_canvas)
+                        H_overlap = min(x.shape[0], y.shape[0])
+                        W_overlap = min(x.shape[1], y.shape[1])
+
+                        for r in range(H_canvas):
+                            for c in range(W_canvas):
+                                if r < H_overlap and c < W_overlap:
+                                    if x[r, c] == y[r, c]:
+                                        # Outside M: constrain to x's color
+                                        U_x.data[r, c] = color_to_mask(int(x[r, c]))
+                                    # else: on M, leave as TOP (all colors possible)
+                                # else: outside x, leave as TOP
+
+                        # Apply closure
+                        U1 = candidate.apply(U_x, x)
+
+                        # Check mask-local property
+                        H_overlap = min(x.shape[0], y.shape[0])
+                        W_overlap = min(x.shape[1], y.shape[1])
+
+                        for r in range(H_canvas):
+                            for c in range(W_canvas):
+                                if r < H_overlap and c < W_overlap:
+                                    # Overlap region
+                                    if x[r, c] == y[r, c]:
+                                        # Outside M: require U1[r,c] == {x[r,c]}
+                                        if U1.get_set(r, c) != {x[r, c]}:
+                                            mask_local_ok = False
+                                            break
+                                    else:
+                                        # On M: require y[r,c] in U1[r,c] and U1[r,c] != ∅
+                                        if y[r, c] not in U1.get_set(r, c) or len(U1.get_set(r, c)) == 0:
+                                            mask_local_ok = False
+                                            break
+                                elif r < y.shape[0] and c < y.shape[1]:
+                                    # Outside x, inside y: require y[r,c] in U1[r,c]
+                                    if y[r, c] not in U1.get_set(r, c):
+                                        mask_local_ok = False
+                                        break
+                            if not mask_local_ok:
+                                break
+
+                    if mask_local_ok:
+                        valid.append(candidate)
+                        # Early exit after finding enough good candidates
+                        if len(valid) >= 5:
+                            return valid
+
+                except Exception:
+                    # Skip candidates that fail gates or mask-local check
+                    continue
+
+    return valid
